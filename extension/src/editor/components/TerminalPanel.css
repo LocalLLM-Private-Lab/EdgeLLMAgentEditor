@@ -1,0 +1,110 @@
+.terminal-panel {
+  height: 100%;
+  background: #0c0c0c;
+  color: #d4d4d4;
+  display: flex;
+  flex-direction: column;
+}
+
+.terminal-panel-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  background: #1a1a1a;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.terminal-launch-message {
+  color: #9ca3af;
+  font-size: 11px;
+}
+
+.terminal-status {
+  padding: 2px 6px;
+  border-radius: 3px;
+  font-size: 11px;
+  text-transform: uppercase;
+}
+
+.terminal-status-connected {
+  background: #14532d;
+}
+
+.terminal-status-connecting {
+  background: #78350f;
+}
+
+.terminal-status-disconnected,
+.terminal-status-error {
+  background: #7f1d1d;
+}
+
+.terminal-session-tab {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 8px;
+  background: #262626;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.terminal-session-tab.active {
+  background: #3a3a3a;
+}
+
+.terminal-session-tab button {
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+}
+
+
+.terminal-session-host {
+  flex: 1;
+  min-height: 0;
+  position: relative;
+  padding: 4px;
+}
+
+.terminal-session-container {
+  position: absolute;
+  inset: 4px;
+}
+
+.terminal-settings-form {
+  padding: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  font-size: 13px;
+  max-width: 420px;
+}
+
+.terminal-settings-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.terminal-command-form {
+  display: flex;
+  gap: 6px;
+  padding: 6px 8px;
+  border-top: 1px solid #333;
+  background: #1a1a1a;
+  flex-shrink: 0;
+}
+
+.terminal-command-input {
+  flex: 1;
+  font-family: monospace;
+  font-size: 12px;
+  padding: 4px 6px;
+  background: #0c0c0c;
+  color: #d4d4d4;
+  border: 1px solid #3c3c3c;
+}

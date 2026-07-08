@@ -1,0 +1,40 @@
+.file-tree {
+  font-size: 13px;
+  user-select: none;
+  overflow-y: auto;
+  height: 100%;
+}
+
+.file-tree-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 3px 8px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.file-tree-row:hover {
+  background: var(--row-hover-bg);
+}
+
+.file-tree-icon {
+  flex-shrink: 0;
+}
+
+.file-tree-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.file-tree-inline-input {
+  flex: 1;
+  min-width: 0;
+  font: inherit;
+  font-size: 13px;
+  padding: 1px 4px;
+  border: 1px solid var(--accent-color);
+  background: var(--editor-bg);
+  color: inherit;
+  outline: none;
+}

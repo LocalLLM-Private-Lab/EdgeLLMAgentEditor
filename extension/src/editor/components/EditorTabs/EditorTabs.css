@@ -1,0 +1,73 @@
+.editor-tabs-row {
+  display: flex;
+  align-items: stretch;
+  background: var(--panel-bg);
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.editor-tabs-actions {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 0 6px;
+  border-right: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.editor-tabs-action-button {
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 4px 6px;
+  border-radius: 3px;
+}
+
+.editor-tabs-action-button:hover:not(:disabled) {
+  background: var(--row-hover-bg);
+}
+
+.editor-tabs-action-button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.editor-tabs {
+  display: flex;
+  overflow-x: auto;
+  flex: 1;
+  min-width: 0;
+}
+
+.editor-tab {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 10px;
+  font-size: 13px;
+  border-right: 1px solid var(--border-color);
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.editor-tab.active {
+  background: var(--editor-bg);
+  border-bottom: 2px solid var(--accent-color);
+}
+
+.editor-tab-close {
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  padding: 0 2px;
+  opacity: 0.6;
+}
+
+.editor-tab-close:hover {
+  opacity: 1;
+}

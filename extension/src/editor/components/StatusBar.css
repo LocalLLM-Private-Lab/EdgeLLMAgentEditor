@@ -1,0 +1,18 @@
+.status-bar {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  height: 22px;
+  padding: 0 10px;
+  background: var(--panel-bg);
+  color: var(--text-color);
+  border-top: 1px solid var(--border-color);
+  font-size: 11px;
+  opacity: 0.8;
+}
+
+.status-bar-item {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}

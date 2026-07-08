@@ -1,0 +1,38 @@
+.diff-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.5);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1000;
+}
+
+.diff-modal {
+  width: 90vw;
+  height: 80vh;
+  background: var(--editor-bg);
+  border: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+}
+
+.diff-modal-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 12px;
+  background: var(--panel-bg);
+  border-bottom: 1px solid var(--border-color);
+  font-size: 13px;
+}
+
+.diff-modal-actions {
+  display: flex;
+  gap: 8px;
+}
+
+.diff-modal-body {
+  flex: 1;
+  min-height: 0;
+}

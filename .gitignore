@@ -1,0 +1,7 @@
+# Rust
+terminal-host/target
+terminal-host/**/*.pdb
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,23 @@
+.resize-handle {
+  flex-shrink: 0;
+  background: transparent;
+  position: relative;
+  touch-action: none;
+  z-index: 1;
+}
+
+.resize-handle:hover,
+.resize-handle:active {
+  background: var(--accent-color);
+  opacity: 0.5;
+}
+
+.resize-handle-x {
+  width: 4px;
+  cursor: col-resize;
+}
+
+.resize-handle-y {
+  height: 4px;
+  cursor: row-resize;
+}

@@ -1,0 +1,118 @@
+.copilot-panel {
+  height: 100%;
+  width: 100%;
+  background: var(--panel-bg);
+  padding: 10px;
+  font-size: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  overflow: hidden;
+}
+
+.copilot-sections-row {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  gap: 14px;
+  overflow-x: auto;
+}
+
+.copilot-section {
+  width: 320px;
+  flex-shrink: 0;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.copilot-section-title {
+  font-weight: 600;
+  font-size: 12px;
+  opacity: 0.8;
+}
+
+.copilot-linked-tab {
+  font-size: 11px;
+  opacity: 0.8;
+}
+
+.copilot-candidates {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.copilot-instruction-input {
+  min-height: 60px;
+  resize: vertical;
+  font-family: inherit;
+  font-size: 12px;
+  padding: 6px;
+}
+
+.copilot-checkbox-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11px;
+  opacity: 0.85;
+}
+
+.copilot-actions {
+  display: flex;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.copilot-hint {
+  opacity: 0.6;
+  font-size: 11px;
+}
+
+.copilot-captured-markdown {
+  max-height: 160px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  background: var(--editor-bg);
+  border: 1px solid var(--border-color);
+  padding: 6px;
+  font-size: 11px;
+}
+
+.copilot-block-card {
+  border: 1px solid var(--border-color);
+  padding: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.copilot-block-header {
+  display: flex;
+  justify-content: space-between;
+  font-size: 11px;
+  opacity: 0.8;
+}
+
+.copilot-suggested-path {
+  font-family: monospace;
+}
+
+.copilot-block-preview {
+  max-height: 100px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  font-size: 11px;
+  background: var(--editor-bg);
+  padding: 4px;
+}
+
+.copilot-status {
+  flex-shrink: 0;
+  font-size: 11px;
+  background: #78350f;
+  color: #fef3c7;
+  padding: 6px;
+}

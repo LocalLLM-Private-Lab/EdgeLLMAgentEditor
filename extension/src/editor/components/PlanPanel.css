@@ -1,0 +1,19 @@
+.plan-panel {
+  height: 100%;
+  overflow-y: auto;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+/* .copilot-section is normally a fixed-width column in CopilotPanel's
+   horizontal 3-column layout — here it's stacked vertically instead. */
+.plan-panel .copilot-section {
+  width: 100%;
+}
+
+.plan-flow-hint {
+  font-size: 11px;
+  color: var(--accent-color);
+}

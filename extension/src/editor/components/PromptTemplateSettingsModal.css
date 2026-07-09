@@ -1,5 +1,5 @@
 .prompt-template-modal {
-  width: 640px;
+  width: 780px;
   max-height: 80vh;
   background: var(--editor-bg);
   border: 1px solid var(--border-color);
@@ -13,6 +13,84 @@
   display: flex;
   flex-direction: column;
   gap: 8px;
+  font-size: 13px;
+}
+
+.prompt-template-split {
+  display: flex;
+  min-height: 0;
+  flex: 1;
+}
+
+.prompt-template-list {
+  width: 180px;
+  flex-shrink: 0;
+  border-right: 1px solid var(--border-color);
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  padding: 6px;
+  gap: 2px;
+}
+
+.prompt-template-list-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px;
+  padding: 6px 8px;
+  cursor: pointer;
+  font-size: 12px;
+  border-radius: 3px;
+}
+
+.prompt-template-list-item:hover {
+  background: var(--row-hover-bg);
+}
+
+.prompt-template-list-item.active {
+  background: var(--accent-color);
+  color: #fff;
+}
+
+.prompt-template-list-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.prompt-template-list-delete {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0.7;
+  padding: 0 2px;
+}
+
+.prompt-template-list-delete:hover {
+  opacity: 1;
+}
+
+.prompt-template-add-btn {
+  margin-top: 4px;
+  font-size: 12px;
+}
+
+.prompt-template-editor {
+  flex: 1;
+  min-width: 0;
+  padding: 12px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.prompt-template-name-input {
+  padding: 4px 6px;
   font-size: 13px;
 }
 

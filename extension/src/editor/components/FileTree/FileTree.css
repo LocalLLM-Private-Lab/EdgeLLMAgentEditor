@@ -18,6 +18,14 @@
   background: var(--row-hover-bg);
 }
 
+.file-tree-chevron {
+  flex-shrink: 0;
+  width: 10px;
+  font-size: 9px;
+  opacity: 0.6;
+  text-align: center;
+}
+
 .file-tree-icon {
   flex-shrink: 0;
 }

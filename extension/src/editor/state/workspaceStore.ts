@@ -45,6 +45,11 @@ interface WorkspaceState {
   restoreFromLastSession: () => Promise<void>;
   reconnect: () => Promise<void>;
   toggleExpand: (node: FileTreeNode) => Promise<void>;
+  /** Re-lists one directory's children in place (leaving the rest of the
+   * tree/expanded state untouched) — for callers that created a file
+   * through a raw FileSystemDirectoryHandle call rather than createFile(),
+   * e.g. the Copilot plan flow creating a new file at an arbitrary path. */
+  refreshDirectoryAt: (dirHandle: FileSystemDirectoryHandle, dirPathSegments: string[]) => Promise<void>;
   createFile: (target: DirectoryTarget | null, name: string) => Promise<void>;
   createFolder: (target: DirectoryTarget | null, name: string) => Promise<void>;
   renameEntry: (node: FileTreeNode, newName: string) => Promise<void>;
@@ -64,9 +69,15 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   openFolder: async () => {
     try {
       const handle = await pickWorkspaceFolder();
-      await saveWorkspaceHandle(handle);
       const tree = await buildRootTree(handle);
       set({ rootHandle: handle, status: 'connected', tree, errorMessage: null });
+      // Best-effort only — losing "restore on next launch" (e.g. IndexedDB
+      // unavailable) shouldn't block using the folder for this session.
+      try {
+        await saveWorkspaceHandle(handle);
+      } catch {
+        // ignore
+      }
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return;
       set({ status: 'error', errorMessage: (err as Error).message });
@@ -103,6 +114,10 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       set({ status: 'error', errorMessage: (err as Error).message });
       await clearSavedWorkspaceHandle();
     }
+  },
+
+  refreshDirectoryAt: async (dirHandle, dirPathSegments) => {
+    await refreshDirectory(set, dirHandle, dirPathSegments);
   },
 
   toggleExpand: async (node: FileTreeNode) => {

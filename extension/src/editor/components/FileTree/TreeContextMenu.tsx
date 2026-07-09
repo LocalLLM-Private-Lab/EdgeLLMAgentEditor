@@ -19,6 +19,10 @@ interface TreeContextMenuProps {
   onNewFolder: (contextNode: FileTreeNode | null) => void;
   onRename: (node: FileTreeNode) => void;
   onDelete: (node: FileTreeNode) => void;
+  onCopy: (node: FileTreeNode) => void;
+  /** contextNode is where to paste — null means the root/empty area. */
+  onPaste: (contextNode: FileTreeNode | null) => void;
+  canPaste: boolean;
 }
 
 export function TreeContextMenu({
@@ -28,6 +32,9 @@ export function TreeContextMenu({
   onNewFolder,
   onRename,
   onDelete,
+  onCopy,
+  onPaste,
+  canPaste,
 }: TreeContextMenuProps) {
   useDismissOnOutsideClick(onClose, true, ['click', 'contextmenu']);
 
@@ -37,6 +44,12 @@ export function TreeContextMenu({
     { label: '新しいファイル...', onClick: () => onNewFile(node) },
     { label: '新しいフォルダ...', onClick: () => onNewFolder(node) },
   ];
+  if (node) {
+    items.push({ label: 'コピー', onClick: () => onCopy(node) });
+  }
+  if (canPaste) {
+    items.push({ label: '貼り付け', onClick: () => onPaste(node) });
+  }
   if (node) {
     items.push(
       { label: '名前を変更...', onClick: () => onRename(node) },

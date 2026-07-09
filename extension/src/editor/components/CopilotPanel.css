@@ -10,6 +10,29 @@
   overflow: hidden;
 }
 
+.copilot-subtabs {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+}
+
+.copilot-subtabs button {
+  padding: 4px 10px;
+  font-size: 12px;
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0.7;
+}
+
+.copilot-subtabs button.active {
+  opacity: 1;
+  background: var(--editor-bg);
+  border-radius: 3px 3px 0 0;
+  font-weight: 600;
+}
+
 .copilot-sections-row {
   flex: 1;
   min-height: 0;
@@ -89,6 +112,24 @@
   gap: 4px;
 }
 
+.copilot-block-card.handled {
+  opacity: 0.6;
+}
+
+.copilot-block-handled-badge {
+  font-size: 10px;
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+
+.copilot-block-handled-badge.applied {
+  background: #14532d;
+}
+
+.copilot-block-handled-badge.rejected {
+  background: #7f1d1d;
+}
+
 .copilot-block-header {
   display: flex;
   justify-content: space-between;
@@ -107,6 +148,13 @@
   font-size: 11px;
   background: var(--editor-bg);
   padding: 4px;
+}
+
+.copilot-target-path-input {
+  flex: 1;
+  min-width: 160px;
+  font-family: monospace;
+  font-size: 11px;
 }
 
 .copilot-status {

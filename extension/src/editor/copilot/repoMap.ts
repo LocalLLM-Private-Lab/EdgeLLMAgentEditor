@@ -11,6 +11,13 @@ interface EntryBudget {
  * the single active file. Walks the real directory tree (not just
  * currently-expanded UI state) up to maxDepth/maxEntries so large repos
  * don't blow up the prompt.
+ *
+ * The root line intentionally does NOT show the workspace's actual folder
+ * name (e.g. a local, often-meaningless name like "新しいフォルダー") —
+ * Copilot has repeatedly misread that as a path segment to prepend to
+ * every file path it returns, which silently broke path resolution
+ * downstream. A neutral placeholder carries the same "this is the root"
+ * signal without anything that looks like it belongs in a path.
  */
 export async function buildRepoMap(
   rootHandle: FileSystemDirectoryHandle,
@@ -18,7 +25,7 @@ export async function buildRepoMap(
   maxEntries = 200,
 ): Promise<string> {
   const lines = await walk(rootHandle, 1, '  ', maxDepth, { remaining: maxEntries });
-  return [`${rootHandle.name}/`, ...lines].join('\n');
+  return ['(ワークスペースルート)', ...lines].join('\n');
 }
 
 /** Sibling directories are independent I/O and walked concurrently, but

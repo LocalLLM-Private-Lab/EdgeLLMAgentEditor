@@ -1,6 +1,6 @@
 # アーキテクチャ概要とロードマップ
 
-## 現状(Phase 0〜5 実装済み)
+## 現状(Phase 0〜6 実装済み)
 
 3つの構成要素:
 
@@ -38,6 +38,22 @@
 - v1は行単位パッチではなく**ファイル全体置換**。`promptTemplates.ts`が「ファイル全体を1コードブロックで返す」よう誘導する。
 - `extension/src/editor/components/DiffViewModal.tsx`: `monaco.editor.createDiffEditor`でプレビューし、承認後に`applyToFileFlow.ts`経由で`editorTabsStore.saveFile`(`createWritable()`)を呼んで書き込む。
 - `applyToFileFlow.ts`: 適用先ファイルの既存の改行コード(CRLF/LF)を検出し、Copilot側のコード内容をそれに合わせて正規化してから比較・適用する。
+
+## Phase 6 — 計画→逐次実行・複数ファイル対応(実装済み)
+
+チーム分担(他メンバーがエディタ部分、こちらがCopilot部分)を踏まえ、「クイック編集」(Phase 3〜4の単一ファイルフロー)とは別に、複数ファイルにまたがる作業を計画立てて逐次実行するための第二のフローを追加。`CopilotPanel.tsx`内のサブタブ(「クイック編集」/「計画実行」)で切り替える。
+
+- `extension/src/editor/state/planStore.ts`: ゴール・コンテキストファイル・ステップ一覧(各ステップに`pending`/`in-progress`/`done`のステータス)を保持するzustandストア。`chrome.storage.local`に永続化されるため、タブを閉じても計画は失われない。
+- `extension/src/editor/copilot/planPromptTemplates.ts`: `buildPlanPrompt`(ゴール+repoMap+コンテキストファイルの中身 → 計画作成を依頼)と`buildStepPrompt`(計画全体+今回のステップ+関連ファイルの現在の中身 → そのステップの実行を依頼)。ステップ実行プロンプトは、対象ファイルパスをバッククォート付きでコードブロック直前に明記するよう指示することで、`codeBlockParser.ts`の既存の`suggestedPath`推測ロジックをそのまま複数ファイル対応に転用している(パーサー側の変更は不要)。
+- `extension/src/editor/copilot/planParser.ts`: Copilotの回答から ```json ブロックを抽出し`[{description, files}]`形式として検証。パースに失敗した場合は回答全体を1つの手動ステップとして扱うフォールバックがあり、応答が失われることはない。
+- `extension/src/editor/components/FileContextPicker.tsx`: GitHub Copilot Chat風のコンテキストピッカー。開いているタブは常時チップとして表示され、未選択なら淡色(クリックで追加)、選択済みなら実線+明示的な×(クリックで除外)。開いていないファイルは「+ 他のファイルを検索」から追加(`workspaceFileList.ts` — `repoMap.ts`と同じ実ディレクトリ走査方式で、FileTreeのUI上の遅延読み込み状態には依存しない)。
+- `extension/src/editor/components/PlanStepCard.tsx`: ステップ単位で実行プロンプトのコピー・回答の貼り付け/解析・複数コードブロックそれぞれの適用先解決(`resolveWorkspaceFile.ts`)・差分プレビューを行う。未オープンファイルへの適用は`applyToFileFlow.ts`の`prepareApplyToTreeNode`(Phase 4時点では未使用だった導線)を利用する。完了したステップは自動的に折りたたまれる。
+- **新規ファイルの作成に対応**: Copilotの回答が既存ファイルに無いパスを指定した場合、`resolveWorkspaceFile.ts`の`ensureFileAtPath`(中間ディレクトリも含めて`getDirectoryHandle`/`getFileHandle`に`create:true`で作成)と`applyToFileFlow.ts`の`prepareApplyForNewFile`で新規作成に対応する。実際のファイル作成は「適用して保存」を押すまで行われない(差分プレビュー段階でキャンセルしても空ファイルが残らない)。適用後は`workspaceStore.ts`に追加した`refreshDirectoryAt`で該当ディレクトリのみ再読み込みし、他の展開状態は保持する。
+- **計画・ステップ実行プロンプトもテンプレート化**: `extension/src/editor/state/planPromptTemplateStore.ts`(設定→「計画プロンプトテンプレート...」)で、単一ファイル編集用の`promptTemplateStore.ts`と同じ方式(プレースホルダー置換、デフォルト値は元のハードコード文言)によりカスタマイズできる。
+
+### 副次的な修正
+
+- `workspaceStore.ts`の`openFolder()`: 以前は`saveWorkspaceHandle`(idb-keyval経由のIndexedDB書き込み、「次回起動時に自動復元」用)が失敗すると、フォルダを開く操作全体が失敗扱いになっていた。IndexedDBが使えない環境でも「今回のセッションでそのフォルダを使う」ことは継続できるべきなので、永続化はベストエフォート化した(失敗しても`status: 'connected'`は成立する)。
 
 ## Phase 5 — 仕上げ
 

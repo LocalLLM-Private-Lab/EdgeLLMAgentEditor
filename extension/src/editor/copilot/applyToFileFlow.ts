@@ -1,6 +1,8 @@
 import { useEditorTabsStore } from '../state/editorTabsStore';
+import { useWorkspaceStore } from '../state/workspaceStore';
 import type { FileTreeNode } from '../../shared/types';
 import type { ExtractedCodeBlock } from './codeBlockParser';
+import { ensureFileAtPath } from './resolveWorkspaceFile';
 
 /** Matches the target file's existing CRLF/LF convention — Copilot output
  * is typically LF-only, and Windows-authored files are often CRLF. */
@@ -51,4 +53,41 @@ export async function prepareApplyToTreeNode(
     .openFiles.find((f) => f.pathSegments.join('/') === node.id);
   if (!tab) return null;
   return prepareApplyToOpenTab(tab.id, block);
+}
+
+/** Prepares a diff preview for a file that doesn't exist yet (Copilot's
+ * response targets a path that isn't in the workspace) — the file, and any
+ * missing intermediate directories, are only actually created when the
+ * user accepts the preview, not at preview time, so cancelling never
+ * leaves a stray empty file behind. */
+export function prepareApplyForNewFile(
+  rootHandle: FileSystemDirectoryHandle,
+  relativePath: string,
+  block: ExtractedCodeBlock,
+): ApplyPreview {
+  return {
+    fileName: relativePath,
+    original: '',
+    modified: block.code,
+    language: block.language ?? 'plaintext',
+    apply: async () => {
+      const node = await ensureFileAtPath(rootHandle, relativePath);
+      // Refreshing just the immediate parent only works if that directory
+      // already existed in the tree — for a brand new nested path (e.g.
+      // "src/viewer/Viewer.js" where "src" itself didn't exist yet), there
+      // was no existing "src" node to attach the refreshed children to, so
+      // the update silently no-opped and the new folder never appeared in
+      // the sidebar. Refreshing from the root instead guarantees any new
+      // top-level ancestor shows up, at the cost of collapsing other
+      // expanded folders — an acceptable tradeoff for an occasional action.
+      await useWorkspaceStore.getState().refreshDirectoryAt(rootHandle, []);
+      await useEditorTabsStore.getState().openFile(node);
+      const tab = useEditorTabsStore
+        .getState()
+        .openFiles.find((f) => f.pathSegments.join('/') === node.id);
+      if (!tab) return;
+      tab.model.setValue(block.code);
+      await useEditorTabsStore.getState().saveFile(tab.id);
+    },
+  };
 }

@@ -14,9 +14,11 @@ import { BottomPanel, type BottomPanelTab } from './components/BottomPanel';
 import { MenuBar, type Menu } from './components/MenuBar';
 import { RunCommandSettingsModal } from './components/RunCommandSettingsModal';
 import { PromptTemplateSettingsModal } from './components/PromptTemplateSettingsModal';
+import { PlanPromptTemplateSettingsModal } from './components/PlanPromptTemplateSettingsModal';
 import { ResizeHandle } from './components/ResizeHandle';
 import { useResizable } from './hooks/useResizable';
 import { usePromptTemplateStore } from './state/promptTemplateStore';
+import { usePlanPromptTemplateStore } from './state/planPromptTemplateStore';
 import { getActiveEditor } from './monaco/editorInstanceRegistry';
 
 const PANEL_STATE_STORAGE_KEY = 'uiPanelState';
@@ -48,7 +50,9 @@ export default function App() {
   const queueRunRequest = useTerminalStore((s) => s.queueRunRequest);
   const [runSettingsOpen, setRunSettingsOpen] = useState(false);
   const [promptSettingsOpen, setPromptSettingsOpen] = useState(false);
-  const loadPromptTemplate = usePromptTemplateStore((s) => s.loadTemplate);
+  const [planPromptSettingsOpen, setPlanPromptSettingsOpen] = useState(false);
+  const loadPromptTemplates = usePromptTemplateStore((s) => s.loadTemplates);
+  const loadPlanPromptTemplates = usePlanPromptTemplateStore((s) => s.loadTemplates);
 
   const [terminalEnabled, setTerminalEnabled] = useState(false);
   const [copilotEnabled, setCopilotEnabled] = useState(false);
@@ -76,8 +80,15 @@ export default function App() {
     void restoreFromLastSession();
     void loadTerminalSettings();
     void loadRunCommands();
-    void loadPromptTemplate();
-  }, [restoreFromLastSession, loadTerminalSettings, loadRunCommands, loadPromptTemplate]);
+    void loadPromptTemplates();
+    void loadPlanPromptTemplates();
+  }, [
+    restoreFromLastSession,
+    loadTerminalSettings,
+    loadRunCommands,
+    loadPromptTemplates,
+    loadPlanPromptTemplates,
+  ]);
 
   // Connects to terminal-host as soon as its settings are known, even
   // before the terminal panel has ever been opened, so the terminal
@@ -193,6 +204,7 @@ export default function App() {
       items: [
         { label: '拡張子ごとの実行コマンド...', onClick: () => setRunSettingsOpen(true) },
         { label: 'プロンプトテンプレート...', onClick: () => setPromptSettingsOpen(true) },
+        { label: '計画プロンプトテンプレート...', onClick: () => setPlanPromptSettingsOpen(true) },
       ],
     },
   ];
@@ -255,6 +267,9 @@ export default function App() {
       {runSettingsOpen && <RunCommandSettingsModal onClose={() => setRunSettingsOpen(false)} />}
       {promptSettingsOpen && (
         <PromptTemplateSettingsModal onClose={() => setPromptSettingsOpen(false)} />
+      )}
+      {planPromptSettingsOpen && (
+        <PlanPromptTemplateSettingsModal onClose={() => setPlanPromptSettingsOpen(false)} />
       )}
     </div>
   );

@@ -111,6 +111,9 @@ const TreeNode = memo(function TreeNode({
         onClick={isRenaming ? undefined : handleClick}
         onContextMenu={(e) => onContextMenu(e, node)}
       >
+        <span className="file-tree-chevron">
+          {node.kind === 'directory' ? (isExpanded ? '▼' : '▶') : ''}
+        </span>
         <span className="file-tree-icon">
           {node.kind === 'directory' ? (isExpanded ? '📂' : '📁') : '📄'}
         </span>
@@ -132,6 +135,7 @@ const TreeNode = memo(function TreeNode({
           ))}
           {creatingHere && (
             <div className="file-tree-row" style={{ paddingLeft: `${(depth + 1) * 14 + 8}px` }}>
+              <span className="file-tree-chevron" />
               <span className="file-tree-icon">{creatingKind === 'directory' ? '📁' : '📄'}</span>
               <InlineNameInput
                 initialValue=""
@@ -188,6 +192,7 @@ export function FileTree() {
       ))}
       {rootCreating && (
         <div className="file-tree-row" style={{ paddingLeft: '8px' }}>
+          <span className="file-tree-chevron" />
           <span className="file-tree-icon">{rootCreatingKind === 'directory' ? '📁' : '📄'}</span>
           <InlineNameInput
             initialValue=""

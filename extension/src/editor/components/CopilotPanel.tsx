@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useState } from 'react';
 import { useEditorTabsStore } from '../state/editorTabsStore';
 import { useWorkspaceStore } from '../state/workspaceStore';
 import { usePromptTemplateStore } from '../state/promptTemplateStore';
@@ -41,17 +41,6 @@ export function CopilotPanel() {
   const [applyTargetByBlock, setApplyTargetByBlock] = useState<Record<string, string>>({});
   const [diffPreview, setDiffPreview] = useState<ApplyPreview | null>(null);
 
-  // Whatever's active when the panel first has something to work with is
-  // pre-selected, matching the old "always the active file" default — but
-  // it's just a starting point now: remove it for a repomap-only question,
-  // or add more files as context, via the same picker as 計画実行.
-  useEffect(() => {
-    if (activeTab && contextFiles.length === 0) {
-      setContextFiles([activeTab.pathSegments.join('/')]);
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab?.id]);
-
   async function handleCopyPrompt() {
     if (!rootHandle) return;
     const repoMap = includeRepoMap ? await buildRepoMap(rootHandle) : undefined;
@@ -69,17 +58,18 @@ export function CopilotPanel() {
     setStatus('プロンプトをクリップボードにコピーしました。Copilotのチャット欄に貼り付けて、内容を確認してから送信してください。');
   }
 
-  // Target always defaults to the active file — there's no per-block
-  // candidate list to match against here (unlike 計画実行's declared file
-  // list). suggestedPath is still shown as a hint on the block itself, but
-  // the text input below is how you point at a different (or brand new) file.
+  // Each block defaults to its own detected suggestedPath — critical for a
+  // multi-file response (several `path`:\n```\n...``` blocks), where every
+  // block needs a DIFFERENT target. Only when a block has no detected path
+  // at all does it fall back to the active file, since that's the one
+  // sensible guess for a genuinely single-file response.
   function handleParseResponse() {
     if (!pastedResponse.trim()) return;
     const parsed = extractCodeBlocks(pastedResponse);
     setBlocks(parsed);
     const activePath = activeTab?.pathSegments.join('/') ?? '';
     const defaults: Record<string, string> = {};
-    for (const block of parsed) defaults[block.id] = activePath;
+    for (const block of parsed) defaults[block.id] = block.suggestedPath ?? activePath;
     setApplyTargetByBlock(defaults);
     setStatus(null);
   }

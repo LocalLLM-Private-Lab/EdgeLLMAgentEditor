@@ -31,6 +31,14 @@ export function MonacoEditorPane() {
       if (id) void saveFile(id);
     });
 
+    // editor.action.toggleWordWrap isn't registered in this Monaco build,
+    // and Alt+Z isn't one of the standalone editor's default keybindings
+    // (unlike full VS Code) — bind it directly, same as the View menu item.
+    editor.addCommand(monaco.KeyMod.Alt | monaco.KeyCode.KeyZ, () => {
+      const current = editor.getRawOptions().wordWrap;
+      editor.updateOptions({ wordWrap: current === 'on' ? 'off' : 'on' });
+    });
+
     return () => {
       setActiveEditor(null);
       editor.dispose();

@@ -16,10 +16,13 @@ import { RunCommandSettingsModal } from './components/RunCommandSettingsModal';
 import { PromptTemplateSettingsModal } from './components/PromptTemplateSettingsModal';
 import { PlanPromptTemplateSettingsModal } from './components/PlanPromptTemplateSettingsModal';
 import { ResizeHandle } from './components/ResizeHandle';
+import { QuickOpenModal } from './components/QuickOpenModal';
 import { useResizable } from './hooks/useResizable';
 import { usePromptTemplateStore } from './state/promptTemplateStore';
 import { usePlanPromptTemplateStore } from './state/planPromptTemplateStore';
 import { getActiveEditor } from './monaco/editorInstanceRegistry';
+import { ensureFileAtPath } from './copilot/resolveWorkspaceFile';
+import { writeFileText } from './fs/fsaWorkspace';
 
 const PANEL_STATE_STORAGE_KEY = 'uiPanelState';
 
@@ -32,13 +35,16 @@ interface PanelState {
 export default function App() {
   const status = useWorkspaceStore((s) => s.status);
   const errorMessage = useWorkspaceStore((s) => s.errorMessage);
+  const rootHandle = useWorkspaceStore((s) => s.rootHandle);
   const openFolder = useWorkspaceStore((s) => s.openFolder);
   const reconnect = useWorkspaceStore((s) => s.reconnect);
+  const closeFolder = useWorkspaceStore((s) => s.closeFolder);
   const restoreFromLastSession = useWorkspaceStore((s) => s.restoreFromLastSession);
 
   const openFiles = useEditorTabsStore((s) => s.openFiles);
   const activeFileId = useEditorTabsStore((s) => s.activeFileId);
   const saveFile = useEditorTabsStore((s) => s.saveFile);
+  const openFile = useEditorTabsStore((s) => s.openFile);
   const activeTab = openFiles.find((f) => f.id === activeFileId);
 
   const loadTerminalSettings = useTerminalStore((s) => s.loadSettings);
@@ -155,10 +161,62 @@ export default function App() {
     showTab('terminal');
   }
 
+  const [quickOpenOpen, setQuickOpenOpen] = useState(false);
+
+  // Ctrl+P (Cmd+P on mac) opens quick-open from anywhere, matching VS
+  // Code — preventDefault so the browser's own print dialog doesn't fire.
+  useEffect(() => {
+    function handleKeyDown(e: KeyboardEvent) {
+      if ((e.ctrlKey || e.metaKey) && !e.shiftKey && e.key.toLowerCase() === 'p') {
+        e.preventDefault();
+        setQuickOpenOpen(true);
+      }
+    }
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  async function handleSaveAs() {
+    if (!activeTab || !rootHandle) return;
+    const newName = window.prompt('名前を付けて保存', activeTab.name);
+    if (!newName || newName === activeTab.name) return;
+    try {
+      const parentSegments = activeTab.pathSegments.slice(0, -1);
+      const node = await ensureFileAtPath(rootHandle, [...parentSegments, newName].join('/'));
+      await writeFileText(node.handle as FileSystemFileHandle, activeTab.model.getValue());
+      await useWorkspaceStore.getState().refreshDirectoryAt(rootHandle, []);
+      await openFile(node);
+    } catch (err) {
+      window.alert(`保存できませんでした: ${(err as Error).message}`);
+    }
+  }
+
+  // Clicking a menu item moves DOM focus to the menu button, so the editor
+  // is no longer focused by the time the command runs — harmless for plain
+  // mutations (undo/comment toggle), but commands that open their own
+  // focused widget (goto-line's quick-input, in particular) silently
+  // no-op without an explicitly re-focused editor first.
+  function triggerEditorAction(handlerId: string) {
+    const editor = getActiveEditor();
+    editor?.focus();
+    editor?.trigger('menu', handlerId, null);
+  }
+
+  // editor.action.toggleWordWrap isn't registered in this Monaco build —
+  // flip the option directly instead of going through .trigger().
+  function handleToggleWordWrap() {
+    const editor = getActiveEditor();
+    if (!editor) return;
+    const current = editor.getRawOptions().wordWrap;
+    editor.updateOptions({ wordWrap: current === 'on' ? 'off' : 'on' });
+    editor.focus();
+  }
+
   const menus: Menu[] = [
     {
       label: 'ファイル',
       items: [
+        { label: 'ファイルへ移動... (Ctrl+P)', onClick: () => setQuickOpenOpen(true), disabled: !rootHandle },
         { label: 'フォルダを開く...', onClick: () => void openFolder() },
         {
           label: '保存',
@@ -167,20 +225,42 @@ export default function App() {
           },
           disabled: !activeFileId,
         },
+        {
+          label: '名前を付けて保存...',
+          onClick: () => void handleSaveAs(),
+          disabled: !activeTab,
+        },
+        {
+          label: 'フォルダを閉じる',
+          onClick: () => void closeFolder(),
+          disabled: status !== 'connected' && status !== 'needs-reconnect',
+        },
       ],
     },
     {
       label: '編集',
       items: [
-        { label: '元に戻す (Ctrl+Z)', onClick: () => getActiveEditor()?.trigger('menu', 'undo', null) },
-        { label: 'やり直し (Ctrl+Y)', onClick: () => getActiveEditor()?.trigger('menu', 'redo', null) },
+        { label: '元に戻す (Ctrl+Z)', onClick: () => triggerEditorAction('undo') },
+        { label: 'やり直し (Ctrl+Y)', onClick: () => triggerEditorAction('redo') },
         {
           label: '検索 (Ctrl+F)',
-          onClick: () => getActiveEditor()?.trigger('menu', 'actions.find', null),
+          onClick: () => triggerEditorAction('actions.find'),
         },
         {
           label: '置換 (Ctrl+H)',
-          onClick: () => getActiveEditor()?.trigger('menu', 'editor.action.startFindReplaceAction', null),
+          onClick: () => triggerEditorAction('editor.action.startFindReplaceAction'),
+        },
+        {
+          label: '行コメントの切り替え (Ctrl+/)',
+          onClick: () => triggerEditorAction('editor.action.commentLine'),
+        },
+        {
+          label: 'ブロックコメントの切り替え',
+          onClick: () => triggerEditorAction('editor.action.blockComment'),
+        },
+        {
+          label: '行へ移動... (Ctrl+G)',
+          onClick: () => triggerEditorAction('editor.action.gotoLine'),
         },
       ],
     },
@@ -196,6 +276,10 @@ export default function App() {
           label: 'Copilot',
           onClick: () => toggleTab('copilot'),
           checked: copilotEnabled,
+        },
+        {
+          label: '折り返しの切り替え (Alt+Z)',
+          onClick: handleToggleWordWrap,
         },
       ],
     },
@@ -271,6 +355,7 @@ export default function App() {
       {planPromptSettingsOpen && (
         <PlanPromptTemplateSettingsModal onClose={() => setPlanPromptSettingsOpen(false)} />
       )}
+      {quickOpenOpen && rootHandle && <QuickOpenModal onClose={() => setQuickOpenOpen(false)} />}
     </div>
   );
 }

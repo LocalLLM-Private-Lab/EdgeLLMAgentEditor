@@ -5,6 +5,7 @@ import { usePromptTemplateStore } from '../state/promptTemplateStore';
 import { buildFileEditPrompt } from '../copilot/promptTemplates';
 import { buildRepoMap } from '../copilot/repoMap';
 import { extractCodeBlocks, type ExtractedCodeBlock } from '../copilot/codeBlockParser';
+import { detectNeedFilesRequest } from '../copilot/responseControl';
 import {
   prepareApplyToTreeNode,
   prepareApplyForNewFile,
@@ -40,12 +41,17 @@ export function CopilotPanel() {
   const [blocks, setBlocks] = useState<ExtractedCodeBlock[]>([]);
   const [applyTargetByBlock, setApplyTargetByBlock] = useState<Record<string, string>>({});
   const [diffPreview, setDiffPreview] = useState<ApplyPreview | null>(null);
+  const [justCopiedPrompt, setJustCopiedPrompt] = useState(false);
 
-  async function handleCopyPrompt() {
+  // Takes an explicit file list rather than reading contextFiles from state
+  // — handleParseResponse needs to copy a prompt built from a just-merged
+  // list in the same tick a NEED_FILES reply is detected, before the state
+  // update from that merge has actually landed.
+  async function copyPromptWithFiles(files: string[]) {
     if (!rootHandle) return;
     const repoMap = includeRepoMap ? await buildRepoMap(rootHandle) : undefined;
-    const resolved = await resolveWorkspaceFiles(rootHandle, contextFiles);
-    const files = await Promise.all(
+    const resolved = await resolveWorkspaceFiles(rootHandle, files);
+    const resolvedFiles = await Promise.all(
       [...resolved.entries()].map(async ([path, node]) => {
         // Prefer the live editor buffer over disk in case it's unsaved.
         const openTab = openFiles.find((f) => f.pathSegments.join('/') === path);
@@ -53,9 +59,20 @@ export function CopilotPanel() {
         return { path, content };
       }),
     );
-    const prompt = buildFileEditPrompt(instruction, files, repoMap, promptTemplate);
+    // A path that isn't a real file yet (e.g. added via a NEED_FILES
+    // request for a file Copilot wants created) shouldn't just vanish from
+    // the prompt — say so explicitly instead of silently dropping it.
+    const newFiles = files
+      .filter((path) => !resolved.has(path))
+      .map((path) => ({ path, content: '', isNew: true }));
+    const prompt = buildFileEditPrompt(instruction, [...resolvedFiles, ...newFiles], repoMap, promptTemplate);
     await navigator.clipboard.writeText(prompt);
-    setStatus('プロンプトをクリップボードにコピーしました。Copilotのチャット欄に貼り付けて、内容を確認してから送信してください。');
+  }
+
+  async function handleCopyPrompt() {
+    await copyPromptWithFiles(contextFiles);
+    setJustCopiedPrompt(true);
+    setStatus(null);
   }
 
   // Each block defaults to its own detected suggestedPath — critical for a
@@ -65,6 +82,21 @@ export function CopilotPanel() {
   // sensible guess for a genuinely single-file response.
   function handleParseResponse() {
     if (!pastedResponse.trim()) return;
+    const needFiles = detectNeedFilesRequest(pastedResponse);
+    if (needFiles) {
+      const merged = [...new Set([...contextFiles, ...needFiles])];
+      setContextFiles(merged);
+      setBlocks([]);
+      setPastedResponse('');
+      setJustCopiedPrompt(false);
+      setStatus('Copilotの要求に応じてファイルを追加中...');
+      void copyPromptWithFiles(merged).then(() => {
+        setJustCopiedPrompt(true);
+        setStatus(`Copilotの要求により以下のファイルをコンテキストに追加しました: ${needFiles.join(', ')}`);
+      });
+      return;
+    }
+    setJustCopiedPrompt(false);
     const parsed = extractCodeBlocks(pastedResponse);
     setBlocks(parsed);
     const activePath = activeTab?.pathSegments.join('/') ?? '';
@@ -129,9 +161,9 @@ export function CopilotPanel() {
         <PlanPanel />
       ) : (
         <>
-      <div className="copilot-sections-row">
+      <div className="copilot-sections-column">
       <div className="copilot-section">
-        <div className="copilot-section-title">プロンプト作成</div>
+        <div className="copilot-section-title">① プロンプト作成</div>
         <div className="copilot-hint">
           Copilotへの送信・送信ボタンの操作は行いません。プロンプトをコピーし、
           ご自身でCopilotのタブに貼り付けて送信してください。
@@ -176,6 +208,11 @@ export function CopilotPanel() {
                 クリップボードにコピー
               </button>
             </div>
+            {justCopiedPrompt && (
+              <div className="copilot-flow-hint">
+                ↓ Copilotのチャットに貼り付けて送信し、返ってきた回答を下の②に貼り付けてください
+              </div>
+            )}
           </>
         ) : (
           <div className="copilot-hint">フォルダを開くとプロンプトを作成できます。</div>
@@ -183,7 +220,7 @@ export function CopilotPanel() {
       </div>
 
       <div className="copilot-section">
-        <div className="copilot-section-title">回答の取り込み</div>
+        <div className="copilot-section-title">② 回答の取り込み</div>
         <div className="copilot-hint">
           Copilotの回答をコピーし、下に貼り付けてください(自動取得は行いません)。
         </div>
@@ -194,12 +231,14 @@ export function CopilotPanel() {
           onChange={(e) => setPastedResponse(e.target.value)}
         />
         <div className="copilot-actions">
-          <button onClick={handleParseResponse}>コードブロックを解析</button>
+          <button disabled={!pastedResponse.trim()} onClick={handleParseResponse}>
+            コードブロックを解析
+          </button>
         </div>
       </div>
 
       <div className="copilot-section">
-        <div className="copilot-section-title">解析結果</div>
+        <div className="copilot-section-title">③ 解析結果</div>
         {blocks.length === 0 ? (
           <div className="copilot-hint">まだ解析されたコードブロックはありません。</div>
         ) : (

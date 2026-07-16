@@ -1,9 +1,16 @@
 export interface ContextFileContent {
   path: string;
   content: string;
+  /** True when the path doesn't exist in the workspace yet — say so
+   * explicitly rather than silently sending empty content, since "empty
+   * file" and "file to be created" read very differently to a reader. */
+  isNew?: boolean;
 }
 
 function formatFileBlock(file: ContextFileContent): string {
+  if (file.isNew) {
+    return `\`${file.path}\`(まだ存在しない新規ファイルです。空の状態から新しく作成してください):\n\`\`\`\n\`\`\`\n`;
+  }
   return `\`${file.path}\`:\n\`\`\`\n${file.content}\n\`\`\`\n`;
 }
 
@@ -19,7 +26,7 @@ function formatFileBlock(file: ContextFileContent): string {
  * whether zero, one, or several files were attached.
  */
 const FILE_INSTRUCTION =
-  '変更が必要な各ファイルについて、そのファイルパスを直前にバッククォート付きの相対パスで明記した上で(例: `src/foo.ts`)、ファイル全体を単一のコードブロックとして返してください(差分ではなくファイル全体)。複数ファイルを変更する場合は、ファイルごとに「パス明記+コードブロック」を繰り返してください。ファイルの内容自体に```で始まるコードブロックが含まれる場合(README等のMarkdownファイル)は、内側のコードブロックと区別できるよう、外側のコードブロックを四重のバッククォート(````)以上で囲んでください。';
+  '変更が必要な各ファイルについて、そのファイルパスを直前にバッククォート付きの相対パスで明記した上で(例: `src/foo.ts`)、ファイル全体を単一のコードブロックとして返してください(差分ではなくファイル全体)。複数ファイルを変更する場合は、ファイルごとに「パス明記+コードブロック」を繰り返してください。ファイルの内容自体に、行全体がバッククォート3つ以上だけから成る行(README等のMarkdownファイルに含まれる```のような例示コードブロックの行)がある場合は、その行の各バッククォートの直前にバックスラッシュを1つずつ挿入してエスケープしてください(例: ```bash → \\`\\`\\`bash)。このエスケープはこちらの解析時に自動的に元へ戻すので、ファイル自体の内容は変えないでください。添付されたファイルの内容だけでは正確な変更ができないと判断した場合は、コードブロックを生成せず、代わりに1行だけ `NEED_FILES: path/to/a.ts, path/to/b.ts` の形式で不足しているファイルパスをカンマ区切りで列挙してください。';
 
 export const DEFAULT_EDIT_TEMPLATE = [
   '{repoMapSection}{filesSection}指示: {instruction}',

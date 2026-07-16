@@ -7,6 +7,7 @@ import { buildRepoMap } from '../copilot/repoMap';
 import { resolveWorkspaceFiles } from '../copilot/resolveWorkspaceFile';
 import { readFileText } from '../fs/fsaWorkspace';
 import { parsePlanResponse, fallbackSingleStep } from '../copilot/planParser';
+import { detectNeedFilesRequest } from '../copilot/responseControl';
 import { FileContextPicker } from './FileContextPicker';
 import { PlanStepCard } from './PlanStepCard';
 import './CopilotPanel.css';
@@ -24,6 +25,7 @@ export function PlanPanel() {
   const activeStepId = usePlanStore((s) => s.activeStepId);
   const setGoal = usePlanStore((s) => s.setGoal);
   const addContextFile = usePlanStore((s) => s.addContextFile);
+  const addContextFiles = usePlanStore((s) => s.addContextFiles);
   const removeContextFile = usePlanStore((s) => s.removeContextFile);
   const setSteps = usePlanStore((s) => s.setSteps);
   const setStepStatus = usePlanStore((s) => s.setStepStatus);
@@ -41,20 +43,33 @@ export function PlanPanel() {
     void loadPlan();
   }, [loadPlan]);
 
-  async function handleCopyPlanPrompt() {
+  // Takes an explicit file list rather than reading contextFiles from state
+  // — handleParsePlan needs to copy a prompt built from a just-merged list
+  // in the same tick a NEED_FILES reply is detected, before the store
+  // update from that merge has actually landed.
+  async function copyPlanPromptWithFiles(files: string[]) {
     if (!rootHandle || !goal.trim()) return;
+    const repoMap = includeRepoMap ? await buildRepoMap(rootHandle) : undefined;
+    const resolved = await resolveWorkspaceFiles(rootHandle, files);
+    const resolvedFiles = await Promise.all(
+      [...resolved.entries()].map(async ([path, node]) => ({
+        path,
+        content: await readFileText(node.handle as FileSystemFileHandle),
+      })),
+    );
+    // A path that isn't a real file yet shouldn't just vanish from the
+    // prompt — say so explicitly instead of silently dropping it.
+    const newFiles = files
+      .filter((path) => !resolved.has(path))
+      .map((path) => ({ path, content: '', isNew: true }));
+    const prompt = buildPlanPrompt(goal, repoMap, [...resolvedFiles, ...newFiles], planTemplate);
+    await navigator.clipboard.writeText(prompt);
+  }
+
+  async function handleCopyPlanPrompt() {
     setCopying(true);
     try {
-      const repoMap = includeRepoMap ? await buildRepoMap(rootHandle) : undefined;
-      const resolved = await resolveWorkspaceFiles(rootHandle, contextFiles);
-      const files = await Promise.all(
-        [...resolved.entries()].map(async ([path, node]) => ({
-          path,
-          content: await readFileText(node.handle as FileSystemFileHandle),
-        })),
-      );
-      const prompt = buildPlanPrompt(goal, repoMap, files, planTemplate);
-      await navigator.clipboard.writeText(prompt);
+      await copyPlanPromptWithFiles(contextFiles);
       setJustCopiedPlan(true);
       setStatus(null);
     } finally {
@@ -64,6 +79,19 @@ export function PlanPanel() {
 
   function handleParsePlan() {
     if (!planResponseText.trim()) return;
+    const needFiles = detectNeedFilesRequest(planResponseText);
+    if (needFiles) {
+      const merged = [...new Set([...contextFiles, ...needFiles])];
+      addContextFiles(needFiles);
+      setJustCopiedPlan(false);
+      setPlanResponseText('');
+      setStatus('Copilotの要求に応じてファイルを追加中...');
+      void copyPlanPromptWithFiles(merged).then(() => {
+        setJustCopiedPlan(true);
+        setStatus(`Copilotの要求により以下のファイルをコンテキストに追加しました: ${needFiles.join(', ')}`);
+      });
+      return;
+    }
     const parsed = parsePlanResponse(planResponseText);
     if (parsed) {
       setSteps(parsed);
@@ -140,7 +168,7 @@ export function PlanPanel() {
           {steps.length > 0 && <button onClick={resetPlan}>計画をリセット</button>}
         </div>
         {justCopiedPlan && (
-          <div className="plan-flow-hint">
+          <div className="copilot-flow-hint">
             ↓ Copilotのチャットに貼り付けて送信し、返ってきた回答を下の②に貼り付けてください
           </div>
         )}
@@ -150,7 +178,7 @@ export function PlanPanel() {
         <div className="copilot-section-title">② 計画を取り込む</div>
         <textarea
           className="copilot-instruction-input"
-          placeholder="Copilotが返した計画(JSON)をここに貼り付け"
+          placeholder="Copilotの回答をここに貼り付け(前後に説明文があっても構いません)"
           value={planResponseText}
           onChange={(e) => setPlanResponseText(e.target.value)}
         />

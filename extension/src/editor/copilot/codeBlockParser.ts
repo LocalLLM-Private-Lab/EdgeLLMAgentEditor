@@ -83,6 +83,25 @@ function findPathMarkers(markdown: string): PathMarker[] {
  * closing fence before the next marker (rather than the first one found
  * anywhere) sidesteps that ambiguity entirely.
  */
+// Copilot is asked (see promptTemplates.ts / planPromptTemplates.ts) to
+// escape any line that's itself a bare fence look-alike (a run of 3+
+// backticks or tildes, optionally with a language tag) by prefixing a
+// backslash before each of those characters — the standard Markdown
+// backtick-escape, e.g. ``` becomes \`\`\` — otherwise an embedded example
+// fence (e.g. a README's own ```bash block) masquerades as *this* block's
+// real opening/closing fence. The escape only exists to survive parsing,
+// so it's stripped back out once the real boundaries are known. Runs
+// shorter than 3 are left alone since those can't be mistaken for a fence
+// in the first place.
+const ESCAPED_FENCE_RUN_RE = /^(?:\\`)+|^(?:\\~)+/gm;
+
+function unescapeFenceLines(code: string): string {
+  return code.replace(ESCAPED_FENCE_RUN_RE, (run) => {
+    const bare = run.replace(/\\/g, '');
+    return bare.length >= 3 ? bare : run;
+  });
+}
+
 function extractByPathMarkers(markdown: string): ExtractedCodeBlock[] | null {
   const markers = findPathMarkers(markdown);
   if (markers.length === 0) return null;
@@ -98,7 +117,7 @@ function extractByPathMarkers(markdown: string): ExtractedCodeBlock[] | null {
 
     const code = (lastClose ? region.slice(0, lastClose.index) : region).replace(/\r?\n$/, '');
 
-    return { id: uuid(), language: marker.language, code, suggestedPath: marker.path };
+    return { id: uuid(), language: marker.language, code: unescapeFenceLines(code), suggestedPath: marker.path };
   });
 }
 
@@ -123,7 +142,7 @@ function extractFencedCodeBlocks(markdown: string): ExtractedCodeBlock[] {
       blocks.push({
         id: uuid(),
         language: codeToken.lang?.split(/\s/)[0] || null,
-        code: codeToken.text,
+        code: unescapeFenceLines(codeToken.text),
         suggestedPath: findPathLikeToken(precedingText),
       });
       precedingText = '';

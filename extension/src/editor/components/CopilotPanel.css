@@ -33,18 +33,17 @@
   font-weight: 600;
 }
 
-.copilot-sections-row {
+.copilot-sections-column {
   flex: 1;
   min-height: 0;
   display: flex;
+  flex-direction: column;
   gap: 14px;
-  overflow-x: auto;
+  overflow-y: auto;
 }
 
 .copilot-section {
-  width: 320px;
-  flex-shrink: 0;
-  overflow-y: auto;
+  width: 100%;
   display: flex;
   flex-direction: column;
   gap: 6px;
@@ -163,4 +162,25 @@
   background: #78350f;
   color: #fef3c7;
   padding: 6px;
+}
+
+/* Guidance for "what to do next" — distinct from .copilot-status (which is
+   for outcomes/warnings) so the two signals don't blur together. */
+.copilot-flow-hint {
+  font-size: 11px;
+  color: var(--accent-color);
+}
+
+.copilot-plan-revision {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  background: #78350f;
+  padding: 6px;
+  color: #fef3c7;
+}
+
+.copilot-plan-revision-note {
+  white-space: pre-wrap;
+  font-size: 11px;
 }

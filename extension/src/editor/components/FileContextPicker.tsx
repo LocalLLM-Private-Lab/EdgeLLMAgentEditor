@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { FileTreeNode } from '../../shared/types';
 import { useWorkspaceStore } from '../state/workspaceStore';
 import { useEditorTabsStore } from '../state/editorTabsStore';
@@ -27,12 +27,18 @@ export function FileContextPicker({ selectedPaths, onAdd, onRemove }: FileContex
 
   useDismissOnOutsideClick(() => setPickerOpen(false), pickerOpen);
 
-  async function openPicker() {
+  // Loaded eagerly (not just when the search dropdown opens) so a chip
+  // that's already selected — e.g. auto-added from a NEED_FILES reply, or
+  // a plan step's declared "file to create" — can be checked for existence
+  // right away instead of only once the user happens to open the picker.
+  useEffect(() => {
+    setAllFiles(null);
+    if (rootHandle) void listWorkspaceFiles(rootHandle).then(setAllFiles);
+  }, [rootHandle]);
+
+  function openPicker() {
     setPickerOpen(true);
     setQuery('');
-    if (!allFiles && rootHandle) {
-      setAllFiles(await listWorkspaceFiles(rootHandle));
-    }
   }
 
   function choose(path: string) {
@@ -45,6 +51,15 @@ export function FileContextPicker({ selectedPaths, onAdd, onRemove }: FileContex
   // selected also gets one even if it's not open (e.g. added via search).
   const chipPaths = [...new Set([...openFilePaths, ...selectedPaths])];
 
+  // Until allFiles has loaded, existence is unknown — treat as "exists" so
+  // a chip doesn't briefly flash a "new" badge that vanishes a moment
+  // later once the real listing comes in.
+  const existingPaths = allFiles ? new Set(allFiles.map((f) => f.id)) : null;
+  function isNewFile(path: string): boolean {
+    if (openFilePaths.includes(path)) return false;
+    return existingPaths !== null && !existingPaths.has(path);
+  }
+
   const searchResults = (allFiles ?? [])
     .filter((f) => !chipPaths.includes(f.id))
     .filter((f) => query.trim() === '' || f.id.toLowerCase().includes(query.toLowerCase()))
@@ -55,15 +70,20 @@ export function FileContextPicker({ selectedPaths, onAdd, onRemove }: FileContex
       <div className="file-context-chips">
         {chipPaths.map((path) => {
           const included = selectedPaths.includes(path);
+          const isNew = isNewFile(path);
           return (
             <button
               key={path}
               type="button"
-              className={`file-context-chip ${included ? 'included' : 'available'}`}
+              className={`file-context-chip ${included ? 'included' : 'available'} ${isNew ? 'new' : ''}`}
               onClick={() => (included ? onRemove(path) : onAdd(path))}
-              title={included ? 'クリックしてコンテキストから除外' : 'クリックしてコンテキストに追加'}
+              title={
+                (included ? 'クリックしてコンテキストから除外' : 'クリックしてコンテキストに追加') +
+                (isNew ? '(まだ存在しないファイルです。新規作成として扱われます)' : '')
+              }
             >
               {path}
+              {isNew && <span className="file-context-chip-new-badge">新規</span>}
               {included && (
                 <span
                   className="file-context-chip-x"

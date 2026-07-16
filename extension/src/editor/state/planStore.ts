@@ -19,6 +19,7 @@ interface PlanState extends PlanData {
   loadPlan: () => Promise<void>;
   setGoal: (goal: string) => void;
   addContextFile: (path: string) => void;
+  addContextFiles: (paths: string[]) => void;
   removeContextFile: (path: string) => void;
   setSteps: (steps: PlanStep[]) => void;
   setStepStatus: (id: string, status: PlanStep['status']) => void;
@@ -55,6 +56,12 @@ export const usePlanStore = create<PlanState>((set, get) => ({
     const { contextFiles } = get();
     if (contextFiles.includes(path)) return;
     apply(set, get, { contextFiles: [...contextFiles, path] });
+  },
+
+  addContextFiles: (paths) => {
+    const { contextFiles } = get();
+    const merged = [...new Set([...contextFiles, ...paths])];
+    apply(set, get, { contextFiles: merged });
   },
 
   removeContextFile: (path) => {

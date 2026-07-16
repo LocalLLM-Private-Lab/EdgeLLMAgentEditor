@@ -1,10 +1,11 @@
 import { useState } from 'react';
 import type { PlanStep } from '../copilot/planParser';
 import { usePlanPromptTemplateStore } from '../state/planPromptTemplateStore';
-import { buildStepPrompt } from '../copilot/planPromptTemplates';
+import { buildStepPrompt, buildPlanRevisionPrompt } from '../copilot/planPromptTemplates';
 import { resolveWorkspaceFiles } from '../copilot/resolveWorkspaceFile';
 import { readFileText } from '../fs/fsaWorkspace';
 import { extractCodeBlocks, type ExtractedCodeBlock } from '../copilot/codeBlockParser';
+import { detectNeedFilesRequest, detectPlanRevisionRequest } from '../copilot/responseControl';
 import {
   prepareApplyToTreeNode,
   prepareApplyForNewFile,
@@ -62,6 +63,10 @@ export function PlanStepCard({
   const [blockActionStatus, setBlockActionStatus] = useState<Record<string, 'applied' | 'rejected'>>({});
   const [diffPreview, setDiffPreview] = useState<{ blockId: string; preview: ApplyPreview } | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
+  const [justCopiedStep, setJustCopiedStep] = useState(false);
+  const [planRevisionNote, setPlanRevisionNote] = useState<string | null>(null);
+  const [copyingRevision, setCopyingRevision] = useState(false);
+  const [justCopiedRevision, setJustCopiedRevision] = useState(false);
 
   /** Auto-completion: once every parsed block has been either applied or
    * explicitly rejected, there's nothing left to decide on for this step,
@@ -76,21 +81,36 @@ export function PlanStepCard({
     });
   }
 
-  async function handleCopyStepPrompt() {
+  // Takes an explicit file list rather than reading step.files from state —
+  // handleParseResponse needs to copy a prompt built from a just-merged
+  // list in the same tick a NEED_FILES reply is detected, before the state
+  // update from that merge (via onFilesChange) has actually landed.
+  async function copyStepPromptWithFiles(files: string[]) {
     if (!rootHandle) return;
+    const resolved = await resolveWorkspaceFiles(rootHandle, files);
+    const stepFiles = await Promise.all(
+      [...resolved.entries()].map(async ([path, node]) => ({
+        path,
+        content: await readFileText(node.handle as FileSystemFileHandle),
+      })),
+    );
+    // A declared step file that isn't real yet is the normal case for "add
+    // a new file" steps — say so explicitly instead of silently dropping it,
+    // otherwise Copilot never learns it's supposed to create that file.
+    const newFiles = files
+      .filter((path) => !resolved.has(path))
+      .map((path) => ({ path, content: '', isNew: true }));
+    const prompt = buildStepPrompt(goal, allSteps, index, [...stepFiles, ...newFiles], stepTemplate);
+    await navigator.clipboard.writeText(prompt);
+  }
+
+  async function handleCopyStepPrompt() {
     setCopying(true);
     try {
-      const resolved = await resolveWorkspaceFiles(rootHandle, step.files);
-      const stepFiles = await Promise.all(
-        [...resolved.entries()].map(async ([path, node]) => ({
-          path,
-          content: await readFileText(node.handle as FileSystemFileHandle),
-        })),
-      );
-      const prompt = buildStepPrompt(goal, allSteps, index, stepFiles, stepTemplate);
-      await navigator.clipboard.writeText(prompt);
+      await copyStepPromptWithFiles(step.files);
       onStatusChange('in-progress');
-      setStatusMessage('プロンプトをコピーしました。Copilotに貼り付けて送信してください。');
+      setJustCopiedStep(true);
+      setStatusMessage(null);
     } finally {
       setCopying(false);
     }
@@ -98,6 +118,33 @@ export function PlanStepCard({
 
   function handleParseResponse() {
     if (!responseText.trim()) return;
+    const needFiles = detectNeedFilesRequest(responseText);
+    if (needFiles) {
+      const merged = [...new Set([...step.files, ...needFiles])];
+      onFilesChange(merged);
+      setPlanRevisionNote(null);
+      setJustCopiedRevision(false);
+      setBlocks([]);
+      setResponseText('');
+      setJustCopiedStep(false);
+      setStatusMessage('Copilotの要求に応じてファイルを追加中...');
+      void copyStepPromptWithFiles(merged).then(() => {
+        setJustCopiedStep(true);
+        setStatusMessage(`Copilotの要求により以下のファイルを対象ファイルに追加しました: ${needFiles.join(', ')}`);
+      });
+      return;
+    }
+    const revisionNote = detectPlanRevisionRequest(responseText);
+    if (revisionNote) {
+      setPlanRevisionNote(revisionNote);
+      setJustCopiedRevision(false);
+      setBlocks([]);
+      setJustCopiedStep(false);
+      setStatusMessage(null);
+      return;
+    }
+    setPlanRevisionNote(null);
+    setJustCopiedStep(false);
     const parsed = extractCodeBlocks(responseText);
     setBlocks(parsed);
     const defaults: Record<string, string> = {};
@@ -120,6 +167,22 @@ export function PlanStepCard({
     setBlockTargets(defaults);
     setBlockActionStatus({});
     setStatusMessage(null);
+  }
+
+  /** Copies a prompt asking Copilot to return a full replacement plan given
+   * the reason it reported via REVISE_PLAN — the result is pasted into the
+   * existing "②計画を取り込む" box in PlanPanel, same as the initial plan. */
+  async function handleCopyRevisionPrompt() {
+    if (!planRevisionNote) return;
+    setCopyingRevision(true);
+    try {
+      const prompt = buildPlanRevisionPrompt(goal, allSteps, planRevisionNote);
+      await navigator.clipboard.writeText(prompt);
+      setJustCopiedRevision(true);
+      setStatusMessage(null);
+    } finally {
+      setCopyingRevision(false);
+    }
   }
 
   /** Every selectable target for a block: the step's declared files, plus
@@ -212,6 +275,11 @@ export function PlanStepCard({
               <button onClick={() => onStatusChange('pending')}>未着手に戻す</button>
             )}
           </div>
+          {justCopiedStep && (
+            <div className="copilot-flow-hint">
+              ↓ Copilotのチャットに貼り付けて送信し、返ってきた回答を下の②に貼り付けてください
+            </div>
+          )}
 
           <div className="copilot-hint">② Copilotの回答をここに貼り付け:</div>
           <textarea
@@ -225,6 +293,23 @@ export function PlanStepCard({
               コードブロックを解析
             </button>
           </div>
+
+          {planRevisionNote && (
+            <div className="copilot-plan-revision">
+              <div className="copilot-hint">Copilotが計画の変更を提案しています:</div>
+              <div className="copilot-plan-revision-note">{planRevisionNote}</div>
+              <div className="copilot-actions">
+                <button disabled={copyingRevision} onClick={() => void handleCopyRevisionPrompt()}>
+                  計画修正プロンプトをコピー
+                </button>
+              </div>
+              {justCopiedRevision && (
+                <div className="copilot-flow-hint">
+                  ↓ Copilotのチャットに貼り付けて送信し、返ってきたJSONを上の「②計画を取り込む」に貼り付けてください
+                </div>
+              )}
+            </div>
+          )}
 
           {blocks.length > 0 && (
             <div className="copilot-actions">

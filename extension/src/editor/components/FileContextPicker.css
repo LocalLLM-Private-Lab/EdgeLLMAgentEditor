@@ -39,6 +39,18 @@
   opacity: 1;
 }
 
+.file-context-chip.new {
+  border-style: dashed;
+}
+
+.file-context-chip-new-badge {
+  font-size: 9px;
+  opacity: 0.8;
+  border: 1px solid currentColor;
+  border-radius: 2px;
+  padding: 0 3px;
+}
+
 .file-context-chip-x {
   opacity: 0.6;
   padding: 0 2px;

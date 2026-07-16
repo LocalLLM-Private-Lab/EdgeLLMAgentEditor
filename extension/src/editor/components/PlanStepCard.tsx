@@ -2,10 +2,17 @@ import { useState } from 'react';
 import type { PlanStep } from '../copilot/planParser';
 import { usePlanPromptTemplateStore } from '../state/planPromptTemplateStore';
 import { buildStepPrompt, buildPlanRevisionPrompt } from '../copilot/planPromptTemplates';
+import { buildToolResultPrompt } from '../copilot/promptTemplates';
 import { resolveWorkspaceFiles } from '../copilot/resolveWorkspaceFile';
 import { readFileText } from '../fs/fsaWorkspace';
 import { extractCodeBlocks, type ExtractedCodeBlock } from '../copilot/codeBlockParser';
-import { detectNeedFilesRequest, detectPlanRevisionRequest } from '../copilot/responseControl';
+import {
+  detectNeedFilesRequest,
+  detectPlanRevisionRequest,
+  detectGrepRequest,
+  detectListFilesRequest,
+} from '../copilot/responseControl';
+import { runGrepSearch, runListFiles } from '../copilot/localTools';
 import {
   prepareApplyToTreeNode,
   prepareApplyForNewFile,
@@ -16,7 +23,7 @@ import { DiffViewModal } from './DiffViewModal';
 import './CopilotPanel.css';
 import './PlanStepCard.css';
 
-const STATUS_LABEL: Record<PlanStep['status'], string> = {
+export const STATUS_LABEL: Record<PlanStep['status'], string> = {
   pending: '未着手',
   'in-progress': '進行中',
   done: '完了',
@@ -134,6 +141,41 @@ export function PlanStepCard({
       });
       return;
     }
+
+    if (rootHandle) {
+      const grepPattern = detectGrepRequest(responseText);
+      if (grepPattern) {
+        setPlanRevisionNote(null);
+        setJustCopiedRevision(false);
+        setBlocks([]);
+        setResponseText('');
+        setJustCopiedStep(false);
+        setStatusMessage(`「${grepPattern}」を検索中...`);
+        void runGrepSearch(rootHandle, grepPattern).then(async (result) => {
+          await navigator.clipboard.writeText(buildToolResultPrompt('検索(grep)', grepPattern, result));
+          setJustCopiedStep(true);
+          setStatusMessage('検索結果を踏まえたプロンプトをコピーしました。');
+        });
+        return;
+      }
+
+      const listQuery = detectListFilesRequest(responseText);
+      if (listQuery !== null) {
+        setPlanRevisionNote(null);
+        setJustCopiedRevision(false);
+        setBlocks([]);
+        setResponseText('');
+        setJustCopiedStep(false);
+        setStatusMessage('ファイル一覧を取得中...');
+        void runListFiles(rootHandle, listQuery).then(async (result) => {
+          await navigator.clipboard.writeText(buildToolResultPrompt('ファイル一覧', listQuery, result));
+          setJustCopiedStep(true);
+          setStatusMessage('ファイル一覧を踏まえたプロンプトをコピーしました。');
+        });
+        return;
+      }
+    }
+
     const revisionNote = detectPlanRevisionRequest(responseText);
     if (revisionNote) {
       setPlanRevisionNote(revisionNote);
@@ -265,7 +307,7 @@ export function PlanStepCard({
           />
 
           <div className="copilot-actions">
-            <button disabled={copying} onClick={() => void handleCopyStepPrompt()}>
+            <button className="primary" disabled={copying} onClick={() => void handleCopyStepPrompt()}>
               ① 実行プロンプトをコピー
             </button>
             {step.status !== 'done' && (
@@ -289,7 +331,7 @@ export function PlanStepCard({
             onChange={(e) => setResponseText(e.target.value)}
           />
           <div className="copilot-actions">
-            <button disabled={!responseText.trim()} onClick={handleParseResponse}>
+            <button className="primary" disabled={!responseText.trim()} onClick={handleParseResponse}>
               コードブロックを解析
             </button>
           </div>
@@ -299,7 +341,7 @@ export function PlanStepCard({
               <div className="copilot-hint">Copilotが計画の変更を提案しています:</div>
               <div className="copilot-plan-revision-note">{planRevisionNote}</div>
               <div className="copilot-actions">
-                <button disabled={copyingRevision} onClick={() => void handleCopyRevisionPrompt()}>
+                <button className="primary" disabled={copyingRevision} onClick={() => void handleCopyRevisionPrompt()}>
                   計画修正プロンプトをコピー
                 </button>
               </div>
@@ -313,7 +355,9 @@ export function PlanStepCard({
 
           {blocks.length > 0 && (
             <div className="copilot-actions">
-              <button onClick={() => void handleApplyAll()}>すべて適用</button>
+              <button className="primary" onClick={() => void handleApplyAll()}>
+                すべて適用
+              </button>
             </div>
           )}
           {blocks.map((block) => {

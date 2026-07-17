@@ -40,6 +40,21 @@ interface LspState {
   unregisterDocument: (uri: string) => void;
   notifyDidChange: (uri: string) => void;
   requestDefinition: (uri: string, position: { line: number; character: number }) => Promise<unknown>;
+  requestDeclaration: (uri: string, position: { line: number; character: number }) => Promise<unknown>;
+  requestImplementation: (uri: string, position: { line: number; character: number }) => Promise<unknown>;
+  requestTypeDefinition: (uri: string, position: { line: number; character: number }) => Promise<unknown>;
+  requestReferences: (
+    uri: string,
+    position: { line: number; character: number },
+    includeDeclaration: boolean,
+  ) => Promise<unknown>;
+  requestDocumentSymbols: (uri: string) => Promise<unknown>;
+  requestCompletion: (
+    uri: string,
+    position: { line: number; character: number },
+    context: { triggerKind: number; triggerCharacter?: string },
+  ) => Promise<unknown>;
+  requestSignatureHelp: (uri: string, position: { line: number; character: number }) => Promise<unknown>;
   requestHover: (uri: string, position: { line: number; character: number }) => Promise<unknown>;
 }
 
@@ -131,7 +146,28 @@ async function performInitialize(rootUri: string, set: (partial: Partial<LspStat
       capabilities: {
         textDocument: {
           synchronization: { didSave: true },
+          completion: {
+            completionItem: {
+              snippetSupport: true,
+              commitCharactersSupport: true,
+              documentationFormat: ['markdown', 'plaintext'],
+              deprecatedSupport: true,
+              preselectSupport: true,
+              tagSupport: { valueSet: [1] },
+            },
+          },
           definition: { linkSupport: false },
+          declaration: { linkSupport: false },
+          implementation: { linkSupport: false },
+          typeDefinition: { linkSupport: false },
+          references: {},
+          documentSymbol: { hierarchicalDocumentSymbolSupport: true },
+          signatureHelp: {
+            signatureInformation: {
+              documentationFormat: ['markdown', 'plaintext'],
+              parameterInformation: { labelOffsetSupport: true },
+            },
+          },
           hover: { contentFormat: ['plaintext', 'markdown'] },
           publishDiagnostics: { relatedInformation: false },
         },
@@ -332,5 +368,21 @@ export const useLspStore = create<LspState>((set, get) => ({
   },
 
   requestDefinition: (uri, position) => sendRequest('textDocument/definition', { textDocument: { uri }, position }),
+  requestDeclaration: (uri, position) => sendRequest('textDocument/declaration', { textDocument: { uri }, position }),
+  requestImplementation: (uri, position) =>
+    sendRequest('textDocument/implementation', { textDocument: { uri }, position }),
+  requestTypeDefinition: (uri, position) =>
+    sendRequest('textDocument/typeDefinition', { textDocument: { uri }, position }),
+  requestReferences: (uri, position, includeDeclaration) =>
+    sendRequest('textDocument/references', {
+      textDocument: { uri },
+      position,
+      context: { includeDeclaration },
+    }),
+  requestDocumentSymbols: (uri) => sendRequest('textDocument/documentSymbol', { textDocument: { uri } }),
+  requestCompletion: (uri, position, context) =>
+    sendRequest('textDocument/completion', { textDocument: { uri }, position, context }),
+  requestSignatureHelp: (uri, position) =>
+    sendRequest('textDocument/signatureHelp', { textDocument: { uri }, position }),
   requestHover: (uri, position) => sendRequest('textDocument/hover', { textDocument: { uri }, position }),
 }));

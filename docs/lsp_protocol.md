@@ -45,6 +45,20 @@
 | `process_exited` | `code` | 言語サーバープロセスの読み取りループがEOFに達した(v1では `code` は常に `null` — `terminal-host`の`exited`と同じ理由) |
 | `error` | `message` | 上記以外のエラー(未対応言語の指定など) |
 
+## 現在利用できるLSP機能
+
+`lsp-host`はLSPメッセージを解釈せず中継し、以下の機能を拡張機能側のMonacoプロバイダで提供する。対象は現在Rust(`rust-analyzer`)のみ。
+
+- 定義ジャンプ、宣言ジャンプ、実装ジャンプ、型定義ジャンプ
+- ホバー説明
+- 補完(スニペット、追加テキスト編集、非同期の不完全リストに対応)
+- 参照検索(閉じたワークスペースファイルは結果を選択した時点でタブを開く)
+- ドキュメントシンボル(アウトライン)
+- シグネチャヘルプ(引数ヒント)
+- 診断表示(`textDocument/publishDiagnostics`)
+
+これらはすべて標準のLSPリクエスト/通知であり、ホスト側に個別のメソッド実装は持たない。新しい機能を追加する場合は、`lspStore.ts`のリクエストと`lspProviders.ts`のMonacoプロバイダを対応させ、`initialize`のクライアント能力も必要に応じて更新する。
+
 ## rootUri(ワークスペースルート)の扱い
 
 `terminal-host`の cwd 規約(`docs/protocol.md`)と同じ制約から出発するが、実運用で当初の想定が崩れたため`workspace_root`による明示指定を追加した経緯がある(下記参照)。File System Access API には実OSパスを取得する手段が無いため、`lsp-host` は既定では自分自身の起動ディレクトリ(`std::env::current_dir()`)をワークスペースルートとみなす(`ws_server.rs::default_root_dir()`)。バックスラッシュはLSP用URIでは常にフォワードスラッシュへ変換する(`resolveRelativeFilePath.ts`のターミナル実行コマンド用バックスラッシュ規約とは別物、`url`クレートでパーセントエンコードも行う)。`root_uri` は `Ready` メッセージで一度だけ返され、以降ブラウザ側はワークスペースツリーの `'/'` 区切り相対パスをこの `root_uri` に連結して `file://` URIを組み立てる。

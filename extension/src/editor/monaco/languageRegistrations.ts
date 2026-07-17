@@ -20,6 +20,19 @@ const EXTENSION_TO_LANGUAGE: Record<string, string> = {
   sh: 'shell',
   ps1: 'powershell',
   xml: 'xml',
+  go: 'go',
+  rb: 'ruby',
+  c: 'c',
+  // .h is ambiguous between C and C++; default to c (same limitation VS
+  // Code itself has without a project-level language override).
+  h: 'c',
+  cpp: 'cpp',
+  cc: 'cpp',
+  cxx: 'cpp',
+  hpp: 'cpp',
+  sv: 'system-verilog',
+  svh: 'system-verilog',
+  v: 'verilog',
 };
 
 export function languageFromFilename(name: string): string {

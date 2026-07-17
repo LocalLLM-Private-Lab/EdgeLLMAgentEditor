@@ -1,3 +1,5 @@
+import type { TextEncodingId } from '../editor/fs/textEncodings';
+
 export interface FileTreeNode {
   id: string;
   name: string;
@@ -20,4 +22,6 @@ export interface OpenFile {
   isDirty: boolean;
   language: string;
   lastKnownDiskModified: number;
+  encoding: TextEncodingId;
+  eol: 'LF' | 'CRLF';
 }

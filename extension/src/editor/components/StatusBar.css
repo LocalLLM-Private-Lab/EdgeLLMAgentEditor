@@ -2,17 +2,267 @@
   flex-shrink: 0;
   display: flex;
   align-items: center;
-  height: 22px;
-  padding: 0 10px;
-  background: var(--panel-bg);
+  justify-content: space-between;
+  height: 24px;
+  padding: 0 4px;
+  background: var(--editor-bg);
   color: var(--text-color);
   border-top: 1px solid var(--border-color);
   font-size: 11px;
-  opacity: 0.8;
 }
 
-.status-bar-item {
+/* Every .status-bar-badge (mode indicator, encoding, EOL) shares one accent
+ * driven by the current vim mode, so the whole bar's accent shifts together
+ * instead of just the leftmost badge — set on the bar root and read via
+ * var(...) below, falling back to the base lime when no vim mode is active
+ * (default/emacs keybinding mode, or vim's normal mode). */
+.status-bar[data-vim-mode='insert'] {
+  --mode-bg: #61afef;
+  --mode-fg: #0a2540;
+}
+
+.status-bar[data-vim-mode='visual'] {
+  --mode-bg: #f0a45d;
+  --mode-fg: #3a1e04;
+}
+
+.status-bar[data-vim-mode='replace'] {
+  --mode-bg: #e06c75;
+  --mode-fg: #3a0a0a;
+}
+
+.status-bar-left,
+.status-bar-right {
+  display: flex;
+  align-items: center;
+  height: 100%;
+}
+
+.status-bar-item-wrapper {
+  position: relative;
+  display: flex;
+  height: 100%;
+}
+
+.status-bar-segment {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  background: none;
+  border: none;
+  color: var(--text-color);
+  opacity: 0.75;
+  font-size: 11px;
+  padding: 0 10px;
+  height: 100%;
+  cursor: pointer;
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+.status-bar-segment:hover {
+  opacity: 1;
+  background: var(--row-hover-bg);
+}
+
+.status-bar-segment-static {
+  cursor: default;
+}
+
+.status-bar-segment-static:hover {
+  background: none;
+  opacity: 0.75;
+}
+
+/* Powerline-style badge: solid accent fill with one edge cut to a point via
+ * clip-path, so it flows into the plain status-bar background instead of
+ * ending in a straight edge — a pure-CSS stand-in for a Nerd Font's
+ * powerline separator glyphs, no font asset needed. */
+.status-bar-badge {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  height: 100%;
+  padding: 0 12px;
+  background: var(--mode-bg, #c8e07a);
+  color: var(--mode-fg, #1c2a08);
+  border: none;
+  font-size: 11px;
+  font-weight: 600;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+/* Sits flush against another same-colored badge (encoding + EOL are one
+ * continuous accent block) — a thin divider instead of a clip-path point,
+ * since there's no background-color change to carve a seam out of. */
+.status-bar-badge-adjoined {
+  border-left: 1px solid rgba(0, 0, 0, 0.2);
+}
+
+.status-bar-badge-point-right {
+  clip-path: polygon(0 0, calc(100% - 9px) 0, 100% 50%, calc(100% - 9px) 100%, 0 100%);
+  padding-right: 21px;
+  margin-right: -1px;
+}
+
+.status-bar-badge-point-left {
+  clip-path: polygon(9px 0, 100% 0, 100% 100%, 9px 100%, 0 50%);
+  padding-left: 21px;
+  margin-left: -1px;
+  cursor: pointer;
+}
+
+/* monaco-vim's own toggleVisibility() sets `node.style.display = 'block'`
+ * as an *inline* style whenever it (re)shows the status node, which beats
+ * any plain .status-bar-badge{display:flex} rule regardless of specificity
+ * — the mode text ends up laid out as ordinary block/inline content
+ * instead of centered, reading as top-aligned. !important is the only way
+ * to reliably win against a style monaco-vim re-applies at runtime. */
+.status-bar-keybinding {
+  cursor: default;
+  display: flex !important;
+  align-items: center !important;
+  justify-content: center;
+  line-height: normal;
+  font-weight: 700;
+  letter-spacing: 0.4px;
+}
+
+.status-bar-keybinding span {
+  display: inline-flex;
+  align-items: center;
+  line-height: normal;
+}
+
+.status-bar-keybinding span:empty {
+  display: none;
+}
+
+.status-bar-item-wrapper .codicon,
+.status-bar-badge .codicon,
+.status-bar-segment .codicon {
+  font-size: 13px;
+}
+
+.status-bar-dropdown {
+  position: absolute;
+  bottom: 100%;
+  right: 0;
+  min-width: 220px;
+  max-height: 60vh;
+  overflow-y: auto;
+  background: var(--panel-bg);
+  border: 1px solid var(--border-color);
+  box-shadow: 0 -4px 10px rgba(0, 0, 0, 0.3);
+  display: flex;
+  flex-direction: column;
+  z-index: 100;
+  padding: 4px 0;
+  font-size: 13px;
+}
+
+.status-bar-dropdown-heading {
+  padding: 6px 14px 2px;
+  font-size: 11px;
+  opacity: 0.6;
+  white-space: nowrap;
+}
+
+.status-bar-dropdown-detail {
+  padding: 2px 14px;
+  font-size: 12px;
+  opacity: 0.85;
+  word-break: break-all;
+}
+
+.status-bar-dropdown-detail-error {
+  color: #e06c75;
+  opacity: 1;
+}
+
+.status-bar-lsp-root-hint {
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: normal;
+}
+
+.status-bar-lsp-root-form {
+  display: flex;
+  gap: 6px;
+  padding: 4px 14px 8px;
+}
+
+.status-bar-lsp-root-input {
+  flex: 1;
+  min-width: 0;
+  background: var(--editor-bg);
+  color: var(--text-color);
+  border: 1px solid var(--border-color);
+  border-radius: 2px;
+  padding: 3px 6px;
+  font-size: 12px;
+}
+
+.status-bar-lsp-root-form button {
+  background: var(--row-hover-bg);
+  color: var(--text-color);
+  border: 1px solid var(--border-color);
+  border-radius: 2px;
+  padding: 3px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+/* Errors should stand out regardless of the current vim-mode accent (unlike
+ * the ready/connecting/fetching states, which follow --mode-bg/--mode-fg
+ * like every other badge) — a red LSP badge blending into an orange VISUAL
+ * badge would be easy to miss. */
+.status-bar-badge-lsp-error {
+  background: #e06c75;
+  color: #3a0a0a;
+}
+
+.status-bar-lsp-spin {
+  animation: status-bar-lsp-spin 1.2s linear infinite;
+}
+
+@keyframes status-bar-lsp-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+/* Codicon glyphs not already defined by Monaco's bundled editor.main.css
+ * (which only ships :before rules for icons Monaco's own widgets use) —
+ * the @font-face + base .codicon[class*=codicon-] font-application rule
+ * come from that stylesheet, already loaded via MonacoEditorPane.tsx.
+ * Codepoints from @vscode/codicons (MIT), not bundled as a dependency. */
+.codicon-globe:before {
+  content: '\eb01';
+}
+
+.codicon-newline:before {
+  content: '\ebea';
+}
+
+.codicon-folder:before {
+  content: '\ea83';
+}
+
+.codicon-sync:before {
+  content: '\ea77';
+}
+
+.codicon-check:before {
+  content: '\eab2';
+}
+
+.codicon-warning:before {
+  content: '\ea6c';
 }

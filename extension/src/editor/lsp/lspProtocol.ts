@@ -7,13 +7,13 @@
 
 export type ClientMessage =
   | { type: 'open_session'; language: string; workspace_root?: string }
-  | { type: 'lsp'; payload: unknown }
+  | { type: 'lsp'; language: string; payload: unknown }
   | { type: 'close_session' };
 
 export type ServerMessage =
-  | { type: 'ready'; root_uri: string }
+  | { type: 'ready'; language: string; root_uri: string }
   | { type: 'fetch_progress'; downloaded: number; total: number | null }
   | { type: 'fetch_error'; message: string }
-  | { type: 'lsp'; payload: unknown }
-  | { type: 'process_exited'; code: number | null }
+  | { type: 'lsp'; language: string; payload: unknown }
+  | { type: 'process_exited'; language: string; code: number | null }
   | { type: 'error'; message: string };

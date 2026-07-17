@@ -68,7 +68,7 @@ async fn main() -> anyhow::Result<()> {
     println!("  listening on ws://127.0.0.1:{port}/ws");
     println!("  token: {}", cfg.token);
     println!();
-    println!("  Rust workspace root will be: {cwd}");
+    println!("  Default language-server workspace root will be: {cwd}");
     println!("  (this process's own launch directory — run lsp-host.exe from inside");
     println!("   your Rust project's root folder, same convention as terminal-host)");
 

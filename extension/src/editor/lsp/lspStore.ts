@@ -3,6 +3,7 @@ import { create } from 'zustand';
 import { LspWsClient } from './lspWsClient';
 import type { ServerMessage } from './lspProtocol';
 import { launchLspHostViaNativeMessaging } from './lspNativeLaunch';
+import { isLspLanguage } from './lspLanguages';
 import { type LspRange, lspRangeToMonaco, normalizeUriKey } from './uriTranslation';
 import { getStoredValue, setStoredValue } from '../../shared/chromeStorage';
 
@@ -16,68 +17,68 @@ interface LspState {
   errorMessage: string | null;
   rootUri: string | null;
   serverVersion: string | null;
-  /** Absolute filesystem path the user has explicitly told lsp-host to use
-   * as the Cargo project root, overriding its own launch-directory guess —
-   * see docs/lsp_protocol.md's `workspace_root` field. Null means "let
-   * lsp-host use its own launch directory" (frequently wrong when
-   * auto-launched via Native Messaging, since that cwd is lsp-host.exe's
-   * own folder, not the user's project — there's no browser API that can
-   * supply the real one). */
+  /** Language whose initialize handshake most recently completed. */
+  readyLanguage: string | null;
+  /** Absolute filesystem path explicitly selected as the language-server
+   * workspace root. Null means the host chooses its launch directory. */
   workspaceRootOverride: string | null;
   loadWorkspaceRootOverride: () => Promise<void>;
-  /** Persists the override and, if a session is already connected,
-   * restarts it against the new root on the same WebSocket connection
-   * (lsp-host tears down the old rust-analyzer process and spawns a fresh
-   * one — see ws_server.rs's OpenSession handler) and re-registers every
-   * currently open .rs tab against the new root. */
   setWorkspaceRootOverride: (path: string | null) => Promise<void>;
-  /** Idempotent: launches lsp-host (if needed), connects, opens the rust
-   * session and completes the LSP `initialize` handshake. Safe to call
-   * repeatedly — concurrent/later calls await the same in-flight attempt,
-   * and a prior failure lets the next call retry from scratch. */
-  ensureSession: () => Promise<void>;
+  /** Ensures the shared WebSocket and the requested language server session
+   * are ready. The default keeps existing callers Rust-compatible. */
+  ensureSession: (language?: string) => Promise<void>;
   registerDocument: (uri: string, model: monaco.editor.ITextModel, languageId: string) => void;
   unregisterDocument: (uri: string) => void;
-  notifyDidChange: (uri: string) => void;
-  requestDefinition: (uri: string, position: { line: number; character: number }) => Promise<unknown>;
-  requestDeclaration: (uri: string, position: { line: number; character: number }) => Promise<unknown>;
-  requestImplementation: (uri: string, position: { line: number; character: number }) => Promise<unknown>;
-  requestTypeDefinition: (uri: string, position: { line: number; character: number }) => Promise<unknown>;
+  notifyDidChange: (uri: string, languageId: string) => void;
+  requestDefinition: (language: string, uri: string, position: { line: number; character: number }) => Promise<unknown>;
+  requestDeclaration: (language: string, uri: string, position: { line: number; character: number }) => Promise<unknown>;
+  requestImplementation: (
+    language: string,
+    uri: string,
+    position: { line: number; character: number },
+  ) => Promise<unknown>;
+  requestTypeDefinition: (
+    language: string,
+    uri: string,
+    position: { line: number; character: number },
+  ) => Promise<unknown>;
   requestReferences: (
+    language: string,
     uri: string,
     position: { line: number; character: number },
     includeDeclaration: boolean,
   ) => Promise<unknown>;
-  requestDocumentSymbols: (uri: string) => Promise<unknown>;
+  requestDocumentSymbols: (language: string, uri: string) => Promise<unknown>;
   requestCompletion: (
+    language: string,
     uri: string,
     position: { line: number; character: number },
     context: { triggerKind: number; triggerCharacter?: string },
   ) => Promise<unknown>;
-  requestSignatureHelp: (uri: string, position: { line: number; character: number }) => Promise<unknown>;
-  requestHover: (uri: string, position: { line: number; character: number }) => Promise<unknown>;
+  requestSignatureHelp: (
+    language: string,
+    uri: string,
+    position: { line: number; character: number },
+  ) => Promise<unknown>;
+  requestHover: (language: string, uri: string, position: { line: number; character: number }) => Promise<unknown>;
 }
 
-// Pure bookkeeping that never needs to trigger a React re-render on its own
-// — kept as module-level state rather than inside the zustand store, same
-// as textmateTokenization.ts's `loadedLangIds` singleton-guard pattern.
+// The WebSocket is shared, while each language gets an independent server
+// process and initialize handshake. This permits mixed-language projects.
 let client: LspWsClient | null = null;
-let sessionPromise: Promise<void> | null = null;
-let readyDeferred: { resolve: () => void; reject: (err: Error) => void } | null = null;
+let connectionPromise: Promise<void> | null = null;
+let connectionDeferred: { resolve: () => void; reject: (err: Error) => void } | null = null;
+const sessionPromises = new Map<string, Promise<void>>();
+const sessionDeferreds = new Map<string, { resolve: () => void; reject: (err: Error) => void }>();
+const initializedLanguages = new Set<string>();
+const activeLanguages = new Set<string>();
 let nextRequestId = 1;
 const pendingRequests = new Map<number, { resolve: (value: unknown) => void; reject: (err: Error) => void }>();
 
-// Keyed by normalizeUriKey(uri) (case-insensitive), not the raw uri string —
-// rust-analyzer may echo back a differently-cased `file://` URI than the one
-// this client sent (e.g. Windows drive-letter case), so a raw-string map
-// would silently miss lookups from server-originated URIs (diagnostics,
-// definition results). `uri` inside TrackedDocument keeps the *original*,
-// correctly-cased string this client constructed via pathSegmentsToUri —
-// that's what gets sent back to the server on every outgoing request, since
-// mangling case there could break the server's own file resolution.
 interface TrackedDocument {
   uri: string;
   model: monaco.editor.ITextModel;
+  languageId: string;
 }
 const trackedDocuments = new Map<string, TrackedDocument>();
 const documentVersions = new Map<string, number>();
@@ -92,12 +93,6 @@ const SEVERITY_MAP: Record<number, monaco.MarkerSeverity> = {
   4: monaco.MarkerSeverity.Hint,
 };
 
-/** Reverse lookup for lspProviders.ts: given a Monaco model, find the LSP
- * `file://` URI it was registered under (registerDocument populates
- * trackedDocuments; there's no back-reference on the model itself). Returns
- * the original correctly-cased uri (not the normalized map key) — this is
- * what definition/hover requests send back to the server. Linear scan over
- * open rust documents only — small N in practice. */
 export function getUriForModel(model: monaco.editor.ITextModel): string | null {
   for (const doc of trackedDocuments.values()) {
     if (doc.model === model) return doc.uri;
@@ -105,7 +100,7 @@ export function getUriForModel(model: monaco.editor.ITextModel): string | null {
   return null;
 }
 
-function sendRequest(method: string, params: unknown): Promise<unknown> {
+function sendRequest(language: string, method: string, params: unknown): Promise<unknown> {
   return new Promise((resolve, reject) => {
     if (!client) {
       reject(new Error('LSPセッションが接続されていません'));
@@ -113,12 +108,12 @@ function sendRequest(method: string, params: unknown): Promise<unknown> {
     }
     const id = nextRequestId++;
     pendingRequests.set(id, { resolve, reject });
-    client.send({ type: 'lsp', payload: { jsonrpc: '2.0', id, method, params } });
+    client.send({ type: 'lsp', language, payload: { jsonrpc: '2.0', id, method, params } });
   });
 }
 
-function sendNotification(method: string, params: unknown): void {
-  client?.send({ type: 'lsp', payload: { jsonrpc: '2.0', method, params } });
+function sendNotification(language: string, method: string, params: unknown): void {
+  client?.send({ type: 'lsp', language, payload: { jsonrpc: '2.0', method, params } });
 }
 
 interface PublishDiagnosticsParams {
@@ -126,7 +121,7 @@ interface PublishDiagnosticsParams {
   diagnostics: Array<{ range: LspRange; severity?: number; message: string }>;
 }
 
-function applyDiagnostics(params: PublishDiagnosticsParams): void {
+function applyDiagnostics(language: string, params: PublishDiagnosticsParams): void {
   const doc = trackedDocuments.get(normalizeUriKey(params.uri));
   if (!doc) return;
   const markers: monaco.editor.IMarkerData[] = params.diagnostics.map((d) => ({
@@ -134,12 +129,16 @@ function applyDiagnostics(params: PublishDiagnosticsParams): void {
     message: d.message,
     severity: SEVERITY_MAP[d.severity ?? 1] ?? monaco.MarkerSeverity.Error,
   }));
-  monaco.editor.setModelMarkers(doc.model, 'rust-analyzer', markers);
+  monaco.editor.setModelMarkers(doc.model, `lsp-${language}`, markers);
 }
 
-async function performInitialize(rootUri: string, set: (partial: Partial<LspState>) => void): Promise<void> {
+async function performInitialize(
+  language: string,
+  rootUri: string,
+  set: (partial: Partial<LspState>) => void,
+): Promise<void> {
   try {
-    const result = (await sendRequest('initialize', {
+    const result = (await sendRequest(language, 'initialize', {
       processId: null,
       rootUri,
       workspaceFolders: [{ uri: rootUri, name: 'workspace' }],
@@ -173,40 +172,59 @@ async function performInitialize(rootUri: string, set: (partial: Partial<LspStat
         },
       },
     })) as { serverInfo?: { version?: string } } | undefined;
-    sendNotification('initialized', {});
-    set({ status: 'ready', serverVersion: result?.serverInfo?.version ?? null, errorMessage: null });
-    readyDeferred?.resolve();
-    readyDeferred = null;
+    sendNotification(language, 'initialized', {});
+    initializedLanguages.add(language);
+    set({
+      status: 'ready',
+      readyLanguage: language,
+      serverVersion: result?.serverInfo?.version ?? null,
+      errorMessage: null,
+    });
+    sessionDeferreds.get(language)?.resolve();
+    sessionDeferreds.delete(language);
   } catch (err) {
     const error = err instanceof Error ? err : new Error(String(err));
+    initializedLanguages.delete(language);
     set({ status: 'error', errorMessage: error.message });
-    readyDeferred?.reject(error);
-    readyDeferred = null;
+    sessionDeferreds.get(language)?.reject(error);
+    sessionDeferreds.delete(language);
   }
+}
+
+function rejectAllSessions(error: Error): void {
+  for (const deferred of sessionDeferreds.values()) deferred.reject(error);
+  sessionDeferreds.clear();
+  initializedLanguages.clear();
 }
 
 function handleServerMessage(msg: ServerMessage, set: (partial: Partial<LspState>) => void): void {
   switch (msg.type) {
     case 'ready':
-      set({ rootUri: msg.root_uri });
-      void performInitialize(msg.root_uri, set);
+      set({ rootUri: msg.root_uri, readyLanguage: msg.language });
+      void performInitialize(msg.language, msg.root_uri, set);
       break;
     case 'fetch_progress':
       set({ status: 'fetching', fetchProgress: { downloaded: msg.downloaded, total: msg.total } });
       break;
-    case 'fetch_error':
+    case 'fetch_error': {
+      const error = new Error(msg.message);
       set({ status: 'error', errorMessage: msg.message });
-      readyDeferred?.reject(new Error(msg.message));
-      readyDeferred = null;
+      rejectAllSessions(error);
       break;
+    }
     case 'process_exited':
-      set({ status: 'error', errorMessage: 'rust-analyzerプロセスが終了しました' });
+      initializedLanguages.delete(msg.language);
+      sessionPromises.delete(msg.language);
+      sessionDeferreds.get(msg.language)?.reject(new Error(`${msg.language} の言語サーバーが終了しました`));
+      sessionDeferreds.delete(msg.language);
+      set({ status: 'error', errorMessage: `${msg.language} の言語サーバーが終了しました` });
       break;
-    case 'error':
+    case 'error': {
+      const error = new Error(msg.message);
       set({ status: 'error', errorMessage: msg.message });
-      readyDeferred?.reject(new Error(msg.message));
-      readyDeferred = null;
+      rejectAllSessions(error);
       break;
+    }
     case 'lsp': {
       const payload = msg.payload;
       if (typeof payload !== 'object' || payload === null) return;
@@ -224,37 +242,46 @@ function handleServerMessage(msg: ServerMessage, set: (partial: Partial<LspState
         return;
       }
       if (record.method === 'textDocument/publishDiagnostics') {
-        applyDiagnostics(record.params as PublishDiagnosticsParams);
+        applyDiagnostics(msg.language, record.params as PublishDiagnosticsParams);
       }
       break;
     }
   }
 }
 
-function connectAndOpenSession(
+function connect(
   port: number,
   token: string,
-  workspaceRoot: string | null,
   set: (partial: Partial<LspState>) => void,
 ): Promise<void> {
+  const reconnecting = client !== null;
   return new Promise((resolve, reject) => {
-    readyDeferred = { resolve, reject };
+    connectionDeferred = { resolve, reject };
     const wsClient = new LspWsClient({
       url: `ws://127.0.0.1:${port}/ws`,
       token,
       onStateChange: (wsState) => {
         if (wsState === 'connected') {
           set({ status: 'starting' });
-          wsClient.send({ type: 'open_session', language: 'rust', workspace_root: workspaceRoot ?? undefined });
+          connectionDeferred?.resolve();
+          connectionDeferred = null;
+          // Reopen every language session after the reconnect loop creates a
+          // fresh WebSocket/server set.
+          if (reconnecting) {
+            for (const language of activeLanguages) {
+              initializedLanguages.delete(language);
+              sessionPromises.delete(language);
+              void openLanguageSession(language, useLspStore.getState().workspaceRootOverride, set).catch(
+                () => undefined,
+              );
+            }
+          }
         } else if (wsState === 'error') {
           const error = new Error('lsp-hostへの接続に失敗しました');
           set({ status: 'error', errorMessage: error.message });
-          readyDeferred?.reject(error);
-          readyDeferred = null;
+          connectionDeferred?.reject(error);
+          connectionDeferred = null;
         }
-        // A 'disconnected' event while a session was already ready means
-        // lspWsClient's own reconnect loop is retrying — status is left as
-        // reported until the reconnect either succeeds or errors out.
       },
       onMessage: (msg) => handleServerMessage(msg, set),
     });
@@ -263,12 +290,66 @@ function connectAndOpenSession(
   });
 }
 
+async function ensureConnection(set: (partial: Partial<LspState>) => void): Promise<void> {
+  if (connectionPromise) return connectionPromise;
+  connectionPromise = (async () => {
+    set({ status: 'connecting', errorMessage: null, fetchProgress: null });
+    const launch = await launchLspHostViaNativeMessaging();
+    if (launch.status !== 'started' && launch.status !== 'already_running') {
+      const message =
+        launch.status === 'timeout'
+          ? '応答がありません。Edgeを完全に再起動(全ウィンドウを閉じる)してから再度お試しください。'
+          : launch.status === 'unavailable'
+            ? `lsp-hostが未登録です。lsp-host/install-native-messaging-host.bat を一度実行してください。(${launch.message})`
+            : launch.message;
+      throw new Error(message);
+    }
+    await connect(launch.port, launch.token, set);
+  })().catch((err) => {
+    const error = err instanceof Error ? err : new Error(String(err));
+    set({ status: 'error', errorMessage: error.message });
+    connectionPromise = null;
+    throw error;
+  });
+  return connectionPromise;
+}
+
+function openLanguageSession(
+  language: string,
+  workspaceRoot: string | null,
+  set: (partial: Partial<LspState>) => void,
+): Promise<void> {
+  const existing = sessionPromises.get(language);
+  if (existing) return existing;
+
+  const promise = (async () => {
+    await ensureConnection(set);
+    await new Promise<void>((resolve, reject) => {
+      sessionDeferreds.set(language, { resolve, reject });
+      client?.send({
+        type: 'open_session',
+        language,
+        workspace_root: workspaceRoot ?? undefined,
+      });
+    });
+  })();
+  sessionPromises.set(language, promise);
+  void promise.catch(() => {
+    if (sessionPromises.get(language) === promise) {
+      sessionPromises.delete(language);
+      initializedLanguages.delete(language);
+    }
+  });
+  return promise;
+}
+
 export const useLspStore = create<LspState>((set, get) => ({
   status: 'idle',
   fetchProgress: null,
   errorMessage: null,
   rootUri: null,
   serverVersion: null,
+  readyLanguage: null,
   workspaceRootOverride: null,
 
   loadWorkspaceRootOverride: async () => {
@@ -279,57 +360,40 @@ export const useLspStore = create<LspState>((set, get) => ({
   setWorkspaceRootOverride: async (path) => {
     await setStoredValue(WORKSPACE_ROOT_STORAGE_KEY, path);
     set({ workspaceRootOverride: path });
-
     if (!client || get().status === 'idle') return;
 
-    // A session is already up against the (wrong) old root — restart it in
-    // place rather than tearing down the WebSocket connection: reopening a
-    // whole new connection would leave the old rust-analyzer process
-    // orphaned server-side (lsp-host scopes one rust-analyzer per
-    // connection, not globally), and lsp-host's OpenSession handler already
-    // knows how to swap roots on an existing connection (see ws_server.rs).
     for (const doc of trackedDocuments.values()) {
-      monaco.editor.setModelMarkers(doc.model, 'rust-analyzer', []);
+      monaco.editor.setModelMarkers(doc.model, `lsp-${doc.languageId}`, []);
     }
     trackedDocuments.clear();
     documentVersions.clear();
     for (const timer of changeTimers.values()) clearTimeout(timer);
     changeTimers.clear();
-    set({ status: 'starting', rootUri: null, serverVersion: null, errorMessage: null, fetchProgress: null });
-    client.send({ type: 'open_session', language: 'rust', workspace_root: path ?? undefined });
+    initializedLanguages.clear();
+    sessionPromises.clear();
+    rejectAllSessions(new Error('LSPワークスペースを変更しました'));
+    set({ status: 'starting', rootUri: null, readyLanguage: null, serverVersion: null, errorMessage: null });
+
+    // Open sessions sequentially so the host can finish tearing down the old
+    // root before the next language server is started.
+    let chain = Promise.resolve();
+    for (const language of activeLanguages) {
+      chain = chain.then(() => openLanguageSession(language, path, set)).catch(() => undefined);
+    }
   },
 
-  ensureSession: () => {
-    if (sessionPromise) return sessionPromise;
-    sessionPromise = (async () => {
-      try {
-        set({ status: 'connecting', errorMessage: null, fetchProgress: null });
-        const launch = await launchLspHostViaNativeMessaging();
-        if (launch.status !== 'started' && launch.status !== 'already_running') {
-          const message =
-            launch.status === 'timeout'
-              ? '応答がありません。Edgeを完全に再起動(全ウィンドウを閉じる)してから再度お試しください。'
-              : launch.status === 'unavailable'
-                ? `lsp-hostが未登録です。lsp-host/install-native-messaging-host.bat を一度実行してください。(${launch.message})`
-                : launch.message;
-          throw new Error(message);
-        }
-        await connectAndOpenSession(launch.port, launch.token, get().workspaceRootOverride, set);
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        set({ status: 'error', errorMessage: message });
-        sessionPromise = null;
-        throw err;
-      }
-    })();
-    return sessionPromise;
+  ensureSession: (language = 'rust') => {
+    if (!isLspLanguage(language)) return Promise.reject(new Error(`未対応のLSP言語: ${language}`));
+    activeLanguages.add(language);
+    if (initializedLanguages.has(language)) return Promise.resolve();
+    return openLanguageSession(language, get().workspaceRootOverride, set);
   },
 
   registerDocument: (uri, model, languageId) => {
     const key = normalizeUriKey(uri);
-    trackedDocuments.set(key, { uri, model });
+    trackedDocuments.set(key, { uri, model, languageId });
     documentVersions.set(key, 1);
-    sendNotification('textDocument/didOpen', {
+    sendNotification(languageId, 'textDocument/didOpen', {
       textDocument: { uri, languageId, version: 1, text: model.getValue() },
     });
   },
@@ -341,13 +405,14 @@ export const useLspStore = create<LspState>((set, get) => ({
       clearTimeout(timer);
       changeTimers.delete(key);
     }
-    if (!trackedDocuments.has(key)) return;
+    const doc = trackedDocuments.get(key);
+    if (!doc) return;
     trackedDocuments.delete(key);
     documentVersions.delete(key);
-    sendNotification('textDocument/didClose', { textDocument: { uri } });
+    sendNotification(doc.languageId, 'textDocument/didClose', { textDocument: { uri } });
   },
 
-  notifyDidChange: (uri) => {
+  notifyDidChange: (uri, languageId) => {
     const key = normalizeUriKey(uri);
     const doc = trackedDocuments.get(key);
     if (!doc) return;
@@ -359,7 +424,7 @@ export const useLspStore = create<LspState>((set, get) => ({
         changeTimers.delete(key);
         const version = (documentVersions.get(key) ?? 1) + 1;
         documentVersions.set(key, version);
-        sendNotification('textDocument/didChange', {
+        sendNotification(languageId, 'textDocument/didChange', {
           textDocument: { uri: doc.uri, version },
           contentChanges: [{ text: doc.model.getValue() }],
         });
@@ -367,22 +432,26 @@ export const useLspStore = create<LspState>((set, get) => ({
     );
   },
 
-  requestDefinition: (uri, position) => sendRequest('textDocument/definition', { textDocument: { uri }, position }),
-  requestDeclaration: (uri, position) => sendRequest('textDocument/declaration', { textDocument: { uri }, position }),
-  requestImplementation: (uri, position) =>
-    sendRequest('textDocument/implementation', { textDocument: { uri }, position }),
-  requestTypeDefinition: (uri, position) =>
-    sendRequest('textDocument/typeDefinition', { textDocument: { uri }, position }),
-  requestReferences: (uri, position, includeDeclaration) =>
-    sendRequest('textDocument/references', {
+  requestDefinition: (language, uri, position) =>
+    sendRequest(language, 'textDocument/definition', { textDocument: { uri }, position }),
+  requestDeclaration: (language, uri, position) =>
+    sendRequest(language, 'textDocument/declaration', { textDocument: { uri }, position }),
+  requestImplementation: (language, uri, position) =>
+    sendRequest(language, 'textDocument/implementation', { textDocument: { uri }, position }),
+  requestTypeDefinition: (language, uri, position) =>
+    sendRequest(language, 'textDocument/typeDefinition', { textDocument: { uri }, position }),
+  requestReferences: (language, uri, position, includeDeclaration) =>
+    sendRequest(language, 'textDocument/references', {
       textDocument: { uri },
       position,
       context: { includeDeclaration },
     }),
-  requestDocumentSymbols: (uri) => sendRequest('textDocument/documentSymbol', { textDocument: { uri } }),
-  requestCompletion: (uri, position, context) =>
-    sendRequest('textDocument/completion', { textDocument: { uri }, position, context }),
-  requestSignatureHelp: (uri, position) =>
-    sendRequest('textDocument/signatureHelp', { textDocument: { uri }, position }),
-  requestHover: (uri, position) => sendRequest('textDocument/hover', { textDocument: { uri }, position }),
+  requestDocumentSymbols: (language, uri) =>
+    sendRequest(language, 'textDocument/documentSymbol', { textDocument: { uri } }),
+  requestCompletion: (language, uri, position, context) =>
+    sendRequest(language, 'textDocument/completion', { textDocument: { uri }, position, context }),
+  requestSignatureHelp: (language, uri, position) =>
+    sendRequest(language, 'textDocument/signatureHelp', { textDocument: { uri }, position }),
+  requestHover: (language, uri, position) =>
+    sendRequest(language, 'textDocument/hover', { textDocument: { uri }, position }),
 }));

@@ -12,6 +12,7 @@ const EXTENSION_TO_LANGUAGE: Record<string, string> = {
   scss: 'scss',
   less: 'less',
   md: 'markdown',
+  mk: 'makefile',
   rs: 'rust',
   py: 'python',
   yml: 'yaml',
@@ -36,6 +37,13 @@ const EXTENSION_TO_LANGUAGE: Record<string, string> = {
 };
 
 export function languageFromFilename(name: string): string {
+  const baseName = name.split(/[\\/]/).pop()?.toLowerCase() ?? name.toLowerCase();
+  if (baseName === 'makefile' || baseName === 'gnumakefile' || baseName.startsWith('makefile.')) {
+    return 'makefile';
+  }
+  if (baseName === 'dockerfile' || baseName.startsWith('dockerfile.') || baseName.endsWith('.dockerfile')) {
+    return 'dockerfile';
+  }
   const dot = name.lastIndexOf('.');
   if (dot === -1) return 'plaintext';
   const ext = name.slice(dot + 1).toLowerCase();

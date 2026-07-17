@@ -1,6 +1,6 @@
 import type * as monaco from 'monaco-editor';
 
-/** Builds the `file://` URI lsp-host/rust-analyzer expect for a workspace
+/** Builds the `file://` URI language servers expect for a workspace
  * file, from the same `'/'`-joined path-segment convention `workspaceStore.ts`
  * and `EditorTab.pathSegments` already use. `rootUri` comes from the LSP
  * `Ready` message (lsp-host's own launch directory — see
@@ -12,7 +12,7 @@ export function pathSegmentsToUri(rootUri: string, pathSegments: string[]): stri
   return `${rootUri.replace(/\/+$/, '')}/${relative}`;
 }
 
-/** Inverse of pathSegmentsToUri — used to resolve a rust-analyzer definition
+/** Inverse of pathSegmentsToUri — used to resolve a language-server location
  * location (a `file://` URI) back to the workspace-relative path needed to
  * find/open the matching FSA file (see lspProviders.ts). Returns null for a
  * URI outside `rootUri` (e.g. a location in the Rust standard library's

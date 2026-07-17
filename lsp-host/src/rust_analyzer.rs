@@ -1,4 +1,4 @@
-//! Spawns and owns one rust-analyzer process, relaying its
+//! Spawns and owns one language-server process, relaying its
 //! `Content-Length`-framed stdio as opaque JSON values — this module has no
 //! notion of LSP semantics (methods, ids, capabilities), it's a dumb pipe.
 //! Mirrors the reader-thread design of terminal-host/src/pty_session.rs
@@ -13,7 +13,7 @@ use tokio::sync::mpsc::UnboundedSender;
 
 use crate::protocol::ServerMessage;
 
-pub struct RustAnalyzerSession {
+pub struct LanguageServerSession {
     stdin: Arc<Mutex<ChildStdin>>,
     child: Child,
 }
@@ -49,18 +49,21 @@ fn write_lsp_message<W: Write>(writer: &mut W, value: &Value) -> io::Result<()> 
     writer.flush()
 }
 
-impl RustAnalyzerSession {
-    /// Spawns `exe_path` with `root_dir` as its cwd and starts a reader
+impl LanguageServerSession {
+    /// Spawns `program` with `root_dir` as its cwd and starts a reader
     /// thread that forwards every LSP frame from stdout as
     /// `ServerMessage::Lsp`. Sends `ProcessExited` once the reader hits EOF
     /// (matching `PtySession`'s "always send something on read-loop exit,
     /// even without a real exit code" convention).
     pub fn spawn(
-        exe_path: &std::path::Path,
+        program: &std::path::Path,
+        args: &[&str],
         root_dir: &std::path::Path,
+        language: &str,
         out_tx: UnboundedSender<ServerMessage>,
     ) -> anyhow::Result<Self> {
-        let mut child = Command::new(exe_path)
+        let mut child = Command::new(program)
+            .args(args)
             .current_dir(root_dir)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -76,12 +79,19 @@ impl RustAnalyzerSession {
             .take()
             .ok_or_else(|| anyhow::anyhow!("child has no stdout handle"))?;
 
+        let language = language.to_string();
         std::thread::spawn(move || {
             let mut reader = BufReader::new(stdout);
             loop {
                 match read_lsp_message(&mut reader) {
                     Ok(Some(payload)) => {
-                        if out_tx.send(ServerMessage::Lsp { payload }).is_err() {
+                        if out_tx
+                            .send(ServerMessage::Lsp {
+                                language: language.clone(),
+                                payload,
+                            })
+                            .is_err()
+                        {
                             break;
                         }
                     }
@@ -89,7 +99,7 @@ impl RustAnalyzerSession {
                     Err(_) => break,
                 }
             }
-            let _ = out_tx.send(ServerMessage::ProcessExited { code: None });
+            let _ = out_tx.send(ServerMessage::ProcessExited { language, code: None });
         });
 
         Ok(Self {
@@ -102,7 +112,7 @@ impl RustAnalyzerSession {
         let mut stdin = self
             .stdin
             .lock()
-            .map_err(|_| anyhow::anyhow!("rust-analyzer stdin lock poisoned"))?;
+            .map_err(|_| anyhow::anyhow!("language-server stdin lock poisoned"))?;
         write_lsp_message(&mut *stdin, payload)?;
         Ok(())
     }

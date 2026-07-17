@@ -17,6 +17,7 @@ function LspBadge() {
   const errorMessage = useLspStore((s) => s.errorMessage);
   const rootUri = useLspStore((s) => s.rootUri);
   const serverVersion = useLspStore((s) => s.serverVersion);
+  const readyLanguage = useLspStore((s) => s.readyLanguage);
   const workspaceRootOverride = useLspStore((s) => s.workspaceRootOverride);
   const setWorkspaceRootOverride = useLspStore((s) => s.setWorkspaceRootOverride);
   const [rootInput, setRootInput] = useState(workspaceRootOverride ?? '');
@@ -55,7 +56,7 @@ function LspBadge() {
     status === 'ready' ? 'codicon-check' : status === 'error' ? 'codicon-warning' : 'codicon-sync';
   const label =
     status === 'ready'
-      ? 'Rust LSP'
+      ? `LSP${readyLanguage ? ` (${readyLanguage})` : ''}`
       : status === 'error'
         ? 'LSP エラー'
         : status === 'fetching'
@@ -78,14 +79,14 @@ function LspBadge() {
       </button>
       {open && (
         <div className="status-bar-dropdown" onClick={(e) => e.stopPropagation()}>
-          <div className="status-bar-dropdown-heading">rust-analyzer</div>
+          <div className="status-bar-dropdown-heading">言語サーバー</div>
           <div className="status-bar-dropdown-detail">状態: {status}</div>
           {serverVersion && <div className="status-bar-dropdown-detail">バージョン: {serverVersion}</div>}
           {rootUri && <div className="status-bar-dropdown-detail">root: {rootUri}</div>}
           {errorMessage && <div className="status-bar-dropdown-detail status-bar-dropdown-detail-error">{errorMessage}</div>}
           <div className="status-bar-dropdown-heading">ワークスペースルートを指定</div>
           <div className="status-bar-dropdown-detail status-bar-lsp-root-hint">
-            ブラウザはフォルダの実パスを取得できないため、lsp-hostが自動選択したフォルダが実際のRustプロジェクトと違う場合はここで指定してください。
+            ブラウザはフォルダの実パスを取得できないため、lsp-hostが自動選択したフォルダが実際のプロジェクトと違う場合はここで指定してください。
           </div>
           <div className="status-bar-lsp-root-form">
             <button type="button" onClick={() => void handlePickFolder()} disabled={picking}>
@@ -106,7 +107,7 @@ function LspBadge() {
               className="status-bar-lsp-root-input"
               value={rootInput}
               onChange={(e) => setRootInput(e.target.value)}
-              placeholder="例: C:\Users\me\my-rust-project"
+              placeholder="例: C:\Users\me\my-project"
             />
             <button type="submit">適用</button>
           </form>

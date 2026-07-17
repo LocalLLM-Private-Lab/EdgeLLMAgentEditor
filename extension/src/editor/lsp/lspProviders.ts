@@ -3,6 +3,7 @@ import { useLspStore, getUriForModel } from './lspStore';
 import { useEditorTabsStore } from '../state/editorTabsStore';
 import { useWorkspaceStore } from '../state/workspaceStore';
 import { ensureFileAtPath } from '../copilot/resolveWorkspaceFile';
+import { isLspLanguage, LSP_LANGUAGE_IDS } from './lspLanguages';
 import {
   monacoPositionToLsp,
   lspRangeToMonaco,
@@ -325,7 +326,7 @@ function toSignatureHelp(result: unknown): monaco.languages.SignatureHelpResult 
 
 let registered = false;
 
-/** Registers Monaco providers for rust-analyzer once per extension-page
+/** Registers Monaco providers for language servers once per extension-page
  * lifetime. In addition to definition/hover, this includes declaration,
  * completion, references, outline, implementation, type definition and
  * signature help — all are plain LSP requests relayed by lsp-host. */
@@ -373,15 +374,16 @@ export function ensureLspProvidersRegistered(): void {
   });
 
   const registerLocationProvider = (
-    request: (uri: string, position: { line: number; character: number }) => Promise<unknown>,
+    request: (language: string, uri: string, position: { line: number; character: number }) => Promise<unknown>,
     label: string,
   ) => ({
     provideDefinition: async (model: monaco.editor.ITextModel, position: monaco.IPosition) => {
       const uri = getUriForModel(model);
-      if (!uri) return null;
+      const language = model.getLanguageId();
+      if (!uri || !isLspLanguage(language)) return null;
       let result: unknown;
       try {
-        result = await request(uri, monacoPositionToLsp(position));
+        result = await request(language, uri, monacoPositionToLsp(position));
       } catch (err) {
         // eslint-disable-next-line no-console
         console.warn(`[lsp] textDocument/${label} request failed:`, err);
@@ -392,41 +394,44 @@ export function ensureLspProvidersRegistered(): void {
     },
   });
 
-  monaco.languages.registerDefinitionProvider('rust', {
+  monaco.languages.registerDefinitionProvider(LSP_LANGUAGE_IDS, {
     provideDefinition: registerLocationProvider(
-      (uri, position) => useLspStore.getState().requestDefinition(uri, position),
+      (language, uri, position) => useLspStore.getState().requestDefinition(language, uri, position),
       'definition',
     ).provideDefinition,
   });
 
-  monaco.languages.registerDeclarationProvider('rust', {
+  monaco.languages.registerDeclarationProvider(LSP_LANGUAGE_IDS, {
     provideDeclaration: registerLocationProvider(
-      (uri, position) => useLspStore.getState().requestDeclaration(uri, position),
+      (language, uri, position) => useLspStore.getState().requestDeclaration(language, uri, position),
       'declaration',
     ).provideDefinition,
   });
 
-  monaco.languages.registerImplementationProvider('rust', {
+  monaco.languages.registerImplementationProvider(LSP_LANGUAGE_IDS, {
     provideImplementation: registerLocationProvider(
-      (uri, position) => useLspStore.getState().requestImplementation(uri, position),
+      (language, uri, position) => useLspStore.getState().requestImplementation(language, uri, position),
       'implementation',
     ).provideDefinition,
   });
 
-  monaco.languages.registerTypeDefinitionProvider('rust', {
+  monaco.languages.registerTypeDefinitionProvider(LSP_LANGUAGE_IDS, {
     provideTypeDefinition: registerLocationProvider(
-      (uri, position) => useLspStore.getState().requestTypeDefinition(uri, position),
+      (language, uri, position) => useLspStore.getState().requestTypeDefinition(language, uri, position),
       'typeDefinition',
     ).provideDefinition,
   });
 
-  monaco.languages.registerReferenceProvider('rust', {
+  monaco.languages.registerReferenceProvider(LSP_LANGUAGE_IDS, {
     provideReferences: async (model, position) => {
       const uri = getUriForModel(model);
-      if (!uri) return null;
+      const language = model.getLanguageId();
+      if (!uri || !isLspLanguage(language)) return null;
       let result: unknown;
       try {
-        result = await useLspStore.getState().requestReferences(uri, monacoPositionToLsp(position), true);
+        result = await useLspStore
+          .getState()
+          .requestReferences(language, uri, monacoPositionToLsp(position), true);
       } catch (err) {
         // eslint-disable-next-line no-console
         console.warn('[lsp] textDocument/references request failed:', err);
@@ -438,14 +443,15 @@ export function ensureLspProvidersRegistered(): void {
     },
   });
 
-  monaco.languages.registerCompletionItemProvider('rust', {
+  monaco.languages.registerCompletionItemProvider(LSP_LANGUAGE_IDS, {
     triggerCharacters: ['.', ':', '<', '(', ','],
     provideCompletionItems: async (model, position, context) => {
       const uri = getUriForModel(model);
-      if (!uri) return null;
+      const language = model.getLanguageId();
+      if (!uri || !isLspLanguage(language)) return null;
       let result: unknown;
       try {
-        result = await useLspStore.getState().requestCompletion(uri, monacoPositionToLsp(position), {
+        result = await useLspStore.getState().requestCompletion(language, uri, monacoPositionToLsp(position), {
           // Monaco's trigger kinds are 0/1/2; LSP uses 1/2/3.
           triggerKind: context.triggerKind + 1,
           ...(context.triggerCharacter ? { triggerCharacter: context.triggerCharacter } : {}),
@@ -467,14 +473,17 @@ export function ensureLspProvidersRegistered(): void {
     },
   });
 
-  monaco.languages.registerSignatureHelpProvider('rust', {
+  monaco.languages.registerSignatureHelpProvider(LSP_LANGUAGE_IDS, {
     signatureHelpTriggerCharacters: ['(', ','],
     signatureHelpRetriggerCharacters: [')'],
     provideSignatureHelp: async (model, position) => {
       const uri = getUriForModel(model);
-      if (!uri) return null;
+      const language = model.getLanguageId();
+      if (!uri || !isLspLanguage(language)) return null;
       try {
-        const result = await useLspStore.getState().requestSignatureHelp(uri, monacoPositionToLsp(position));
+        const result = await useLspStore
+          .getState()
+          .requestSignatureHelp(language, uri, monacoPositionToLsp(position));
         return toSignatureHelp(result);
       } catch (err) {
         // eslint-disable-next-line no-console
@@ -484,14 +493,15 @@ export function ensureLspProvidersRegistered(): void {
     },
   });
 
-  monaco.languages.registerDocumentSymbolProvider('rust', {
-    displayName: 'rust-analyzer',
+  monaco.languages.registerDocumentSymbolProvider(LSP_LANGUAGE_IDS, {
+    displayName: 'language server',
     provideDocumentSymbols: async (model) => {
       const uri = getUriForModel(model);
-      if (!uri) return [];
+      const language = model.getLanguageId();
+      if (!uri || !isLspLanguage(language)) return [];
       let result: unknown;
       try {
-        result = await useLspStore.getState().requestDocumentSymbols(uri);
+        result = await useLspStore.getState().requestDocumentSymbols(language, uri);
       } catch (err) {
         // eslint-disable-next-line no-console
         console.warn('[lsp] textDocument/documentSymbol request failed:', err);
@@ -499,7 +509,7 @@ export function ensureLspProvidersRegistered(): void {
       }
       if (!Array.isArray(result)) return [];
 
-      // rust-analyzer normally returns hierarchical DocumentSymbol objects.
+      // Most language servers return hierarchical DocumentSymbol objects.
       // The fallback also accepts the flat SymbolInformation form for older
       // server versions, while keeping symbols from other files out of this
       // document's outline.
@@ -527,13 +537,14 @@ export function ensureLspProvidersRegistered(): void {
     },
   });
 
-  monaco.languages.registerHoverProvider('rust', {
+  monaco.languages.registerHoverProvider(LSP_LANGUAGE_IDS, {
     provideHover: async (model, position) => {
       const uri = getUriForModel(model);
-      if (!uri) return null;
+      const language = model.getLanguageId();
+      if (!uri || !isLspLanguage(language)) return null;
       let result: LspHover | null;
       try {
-        result = (await useLspStore.getState().requestHover(uri, monacoPositionToLsp(position))) as LspHover | null;
+        result = (await useLspStore.getState().requestHover(language, uri, monacoPositionToLsp(position))) as LspHover | null;
       } catch (err) {
         // eslint-disable-next-line no-console
         console.warn('[lsp] textDocument/hover request failed:', err);

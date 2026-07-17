@@ -9,7 +9,9 @@ use axum::{
     Router,
 };
 use futures_util::{SinkExt, StreamExt};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
+use std::process::Command;
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 
@@ -17,7 +19,7 @@ use crate::auth::is_authorized;
 use crate::config::HostConfig;
 use crate::fetch;
 use crate::protocol::{ClientMessage, ServerMessage};
-use crate::rust_analyzer::RustAnalyzerSession;
+use crate::rust_analyzer::LanguageServerSession;
 
 #[derive(Clone)]
 pub struct AppState {
@@ -51,11 +53,9 @@ async fn ws_handler(
 /// `dir` as a `file:///`-prefixed URI, built with the `url` crate rather
 /// than a hand-rolled string (percent-encoding spaces/special characters
 /// correctly — a workspace path like `C:\Users\John Doe\project` needs
-/// `%20`, not a literal space, to be a valid URI). Windows drive-letter
-/// casing may still not byte-match whatever rust-analyzer echoes back in
-/// diagnostics/definition responses, which is why the browser side compares
-/// URIs case-insensitively rather than assuming exact string identity (see
-/// uriTranslation.ts).
+/// `%20`, not a literal space). Windows drive-letter casing may still not
+/// byte-match server responses; the browser compares URI keys
+/// case-insensitively for that reason.
 fn root_uri(dir: &Path) -> String {
     url::Url::from_file_path(dir)
         .map(|u| u.to_string())
@@ -65,50 +65,125 @@ fn root_uri(dir: &Path) -> String {
         })
 }
 
-/// This host's own launch directory — the same `std::env::current_dir()`
-/// convention terminal-host uses for its default PTY cwd (see
-/// `pty_session.rs::default_cwd()`). Used only when the browser doesn't send
-/// an explicit `workspace_root` override; in practice this rarely matches
-/// the user's actual Cargo project when lsp-host was auto-launched via
-/// Native Messaging (its cwd is then lsp-host.exe's own directory, not the
-/// project folder — there's no browser API that can supply the real one, so
-/// the browser has to tell us explicitly instead; see docs/lsp_protocol.md).
 fn default_root_dir() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
 struct ActiveSession {
-    analyzer: RustAnalyzerSession,
+    server: LanguageServerSession,
     root_dir: PathBuf,
 }
 
-async fn ensure_rust_analyzer_session(
+/// Returns the external executable candidates for a language. The `.cmd`
+/// variants are important on Windows because npm global binaries are command
+/// files rather than native executables; `resolve_program` handles them via
+/// cmd.exe after locating them on PATH.
+fn external_server_candidates(language: &str) -> Vec<(&'static str, Vec<&'static str>)> {
+    match language {
+        "c" | "cpp" => vec![("clangd", vec![])],
+        "python" => vec![
+            ("pyright-langserver", vec!["--stdio"]),
+            ("pylsp", vec![]),
+        ],
+        "ruby" => vec![
+            ("solargraph", vec!["stdio"]),
+            ("ruby-lsp", vec![]),
+        ],
+        "html" => vec![("vscode-html-language-server", vec!["--stdio"])],
+        "css" => vec![("vscode-css-language-server", vec!["--stdio"])],
+        "javascript" | "typescript" => vec![("typescript-language-server", vec!["--stdio"])],
+        _ => vec![],
+    }
+}
+
+fn resolve_program(program: &str) -> anyhow::Result<PathBuf> {
+    let lookup = if cfg!(windows) { "where.exe" } else { "which" };
+    let output = Command::new(lookup).arg(program).output()?;
+    if !output.status.success() {
+        anyhow::bail!("executable not found on PATH: {program}");
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let path = stdout
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .ok_or_else(|| anyhow::anyhow!("executable not found on PATH: {program}"))?;
+    Ok(PathBuf::from(path))
+}
+
+fn spawn_external_server(
+    program: &str,
+    args: &[&str],
+    root_dir: &Path,
+    language: &str,
+    out_tx: mpsc::UnboundedSender<ServerMessage>,
+) -> anyhow::Result<LanguageServerSession> {
+    let resolved = resolve_program(program)?;
+    let is_cmd = resolved
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("cmd") || ext.eq_ignore_ascii_case("bat"));
+
+    if !is_cmd {
+        return LanguageServerSession::spawn(&resolved, args, root_dir, language, out_tx);
+    }
+
+    // Command files need a shell on Windows. The arguments used by the
+    // supported language servers are fixed, so a single quoted command line
+    // is sufficient and avoids passing an arbitrary user string to cmd.exe.
+    let mut command_line = format!("\"{}\"", resolved.display());
+    if !args.is_empty() {
+        command_line.push(' ');
+        command_line.push_str(&args.join(" "));
+    }
+    let shell_args = ["/d", "/s", "/c", command_line.as_str()];
+    LanguageServerSession::spawn(
+        Path::new("cmd.exe"),
+        &shell_args,
+        root_dir,
+        language,
+        out_tx,
+    )
+}
+
+async fn ensure_language_server_session(
     out_tx: mpsc::UnboundedSender<ServerMessage>,
     root_dir: PathBuf,
-) -> anyhow::Result<RustAnalyzerSession> {
-    let exe_path = if let Some(cached) = fetch::find_cached_exe() {
-        cached
-    } else {
-        let progress_tx = out_tx.clone();
-        fetch::ensure_rust_analyzer(move |downloaded, total| {
-            let _ = progress_tx.send(ServerMessage::FetchProgress { downloaded, total });
-        })
-        .await?
-    };
+    language: &str,
+) -> anyhow::Result<LanguageServerSession> {
+    if language == "rust" {
+        let exe_path = if let Some(cached) = fetch::find_cached_exe() {
+            cached
+        } else {
+            let progress_tx = out_tx.clone();
+            fetch::ensure_rust_analyzer(move |downloaded, total| {
+                let _ = progress_tx.send(ServerMessage::FetchProgress { downloaded, total });
+            })
+            .await?
+        };
+        return LanguageServerSession::spawn(&exe_path, &[], &root_dir, language, out_tx);
+    }
 
-    RustAnalyzerSession::spawn(&exe_path, &root_dir, out_tx)
+    let candidates = external_server_candidates(language);
+    if candidates.is_empty() {
+        anyhow::bail!("unsupported language: {language}");
+    }
+    let mut errors = Vec::new();
+    for (program, args) in candidates {
+        match spawn_external_server(program, &args, &root_dir, language, out_tx.clone()) {
+            Ok(server) => return Ok(server),
+            Err(err) => errors.push(format!("{program}: {err}")),
+        }
+    }
+    anyhow::bail!(
+        "No language server found for {language}. Install one of the supported servers and ensure it is on PATH. {}",
+        errors.join("; ")
+    )
 }
 
 async fn handle_socket(socket: WebSocket) {
     let (mut ws_tx, mut ws_rx) = socket.split();
-
     let (out_tx, mut out_rx) = mpsc::unbounded_channel::<ServerMessage>();
 
-    // Dedicated writer task: the fetch-progress reporter and the LSP reader
-    // thread (via a std::sync::mpsc-to-tokio bridge inside RustAnalyzerSession)
-    // both funnel outgoing frames through `out_tx`, serialized here so only
-    // one task ever touches the WebSocket sink — same pattern as
-    // terminal-host/src/ws_server.rs.
     let writer_task = tokio::spawn(async move {
         while let Some(msg) = out_rx.recv().await {
             let Ok(json) = serde_json::to_string(&msg) else {
@@ -120,12 +195,10 @@ async fn handle_socket(socket: WebSocket) {
         }
     });
 
-    // Only "rust" is supported today, so a single optional session (rather
-    // than terminal-host's HashMap<session_id, _>) is enough. Wrapped in a
-    // tokio Mutex (not a plain Option) because OpenSession's fetch step runs
-    // in a detached task so it doesn't block this loop from being able to
-    // process a CloseSession/disconnect while a download is in flight.
-    let session: Arc<Mutex<Option<ActiveSession>>> = Arc::new(Mutex::new(None));
+    // One WebSocket now multiplexes one language server per language. This
+    // lets a project keep Rust, Python, C++ and web files open at once while
+    // preserving the opaque LSP JSON-RPC payload design.
+    let sessions: Arc<Mutex<HashMap<String, ActiveSession>>> = Arc::new(Mutex::new(HashMap::new()));
 
     while let Some(Ok(msg)) = ws_rx.next().await {
         let Message::Text(text) = msg else { continue };
@@ -142,7 +215,7 @@ async fn handle_socket(socket: WebSocket) {
                 language,
                 workspace_root,
             } => {
-                if language != "rust" {
+                if language != "rust" && external_server_candidates(&language).is_empty() {
                     let _ = out_tx.send(ServerMessage::Error {
                         message: format!("unsupported language: {language}"),
                     });
@@ -158,35 +231,51 @@ async fn handle_socket(socket: WebSocket) {
                 }
 
                 {
-                    let mut guard = session.lock().await;
-                    if let Some(active) = guard.as_ref() {
-                        if active.root_dir == requested_root {
-                            let _ = out_tx.send(ServerMessage::Ready {
-                                root_uri: root_uri(&active.root_dir),
-                            });
-                            continue;
-                        }
-                        // Workspace root changed (e.g. the user corrected it
-                        // via the status bar) — the running rust-analyzer is
-                        // rooted at the old folder and has to be replaced,
-                        // not reused.
-                        if let Some(mut old) = guard.take() {
-                            let _ = old.analyzer.kill();
+                    let mut guard = sessions.lock().await;
+                    if let Some(active) = guard.get(&language)
+                        && active.root_dir == requested_root
+                    {
+                        let _ = out_tx.send(ServerMessage::Ready {
+                            language,
+                            root_uri: root_uri(&active.root_dir),
+                        });
+                        continue;
+                    }
+
+                    // All language sessions share one workspace root. If the
+                    // root changes, restart every server so their indexes and
+                    // file URIs stay consistent.
+                    if guard.values().any(|active| active.root_dir != requested_root) {
+                        for (_, mut active) in guard.drain() {
+                            let _ = active.server.kill();
                         }
                     }
                 }
 
-                let session_slot = session.clone();
+                let session_slot = sessions.clone();
                 let out_tx2 = out_tx.clone();
+                let language_for_task = language.clone();
                 tokio::spawn(async move {
-                    match ensure_rust_analyzer_session(out_tx2.clone(), requested_root.clone()).await {
-                        Ok(analyzer) => {
+                    match ensure_language_server_session(
+                        out_tx2.clone(),
+                        requested_root.clone(),
+                        &language_for_task,
+                    )
+                    .await
+                    {
+                        Ok(server) => {
                             let root_uri_str = root_uri(&requested_root);
-                            *session_slot.lock().await = Some(ActiveSession {
-                                analyzer,
-                                root_dir: requested_root,
+                            session_slot.lock().await.insert(
+                                language_for_task.clone(),
+                                ActiveSession {
+                                    server,
+                                    root_dir: requested_root,
+                                },
+                            );
+                            let _ = out_tx2.send(ServerMessage::Ready {
+                                language: language_for_task,
+                                root_uri: root_uri_str,
                             });
-                            let _ = out_tx2.send(ServerMessage::Ready { root_uri: root_uri_str });
                         }
                         Err(err) => {
                             let _ = out_tx2.send(ServerMessage::FetchError {
@@ -196,29 +285,30 @@ async fn handle_socket(socket: WebSocket) {
                     }
                 });
             }
-            ClientMessage::Lsp { payload } => {
-                let guard = session.lock().await;
-                if let Some(active) = guard.as_ref()
-                    && let Err(err) = active.analyzer.send(&payload)
-                {
+            ClientMessage::Lsp { language, payload } => {
+                let guard = sessions.lock().await;
+                if let Some(active) = guard.get(&language) {
+                    if let Err(err) = active.server.send(&payload) {
+                        let _ = out_tx.send(ServerMessage::Error {
+                            message: err.to_string(),
+                        });
+                    }
+                } else {
                     let _ = out_tx.send(ServerMessage::Error {
-                        message: err.to_string(),
+                        message: format!("LSP session is not ready for language: {language}"),
                     });
                 }
             }
             ClientMessage::CloseSession => {
-                if let Some(mut active) = session.lock().await.take() {
-                    let _ = active.analyzer.kill();
+                for (_, mut active) in sessions.lock().await.drain() {
+                    let _ = active.server.kill();
                 }
             }
         }
     }
 
-    // Connection closed: the rust-analyzer process is connection-scoped
-    // (same lifecycle as terminal-host's PTY sessions) — reconnecting (e.g.
-    // reloading the editor tab) respawns it and its analysis index rebuilds.
-    if let Some(mut active) = session.lock().await.take() {
-        let _ = active.analyzer.kill();
+    for (_, mut active) in sessions.lock().await.drain() {
+        let _ = active.server.kill();
     }
     writer_task.abort();
 }

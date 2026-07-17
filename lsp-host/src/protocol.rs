@@ -25,6 +25,7 @@ pub enum ClientMessage {
         workspace_root: Option<String>,
     },
     Lsp {
+        language: String,
         payload: serde_json::Value,
     },
     CloseSession,
@@ -36,12 +37,12 @@ pub enum ClientMessage {
 pub enum ServerMessage {
     /// Sent once per session, right after the language server process is
     /// up (spawned fresh, or an already-running one reused). `root_uri` is
-    /// this host's own launch directory as a `file://` URI — see
-    /// `default_root_uri()` in main.rs and docs/lsp_protocol.md.
-    Ready { root_uri: String },
+    /// the requested workspace root as a `file://` URI, or this host's launch
+    /// directory when no override was supplied.
+    Ready { language: String, root_uri: String },
     FetchProgress { downloaded: u64, total: Option<u64> },
     FetchError { message: String },
-    Lsp { payload: serde_json::Value },
-    ProcessExited { code: Option<i32> },
+    Lsp { language: String, payload: serde_json::Value },
+    ProcessExited { language: String, code: Option<i32> },
     Error { message: String },
 }

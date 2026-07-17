@@ -7,6 +7,7 @@ import { languageFromFilename } from '../monaco/languageRegistrations';
 import { ensureLanguageTokenization } from '../monaco/textmateTokenization';
 import { decodeBytes, detectEncodingFromBytes, encodeString, type TextEncodingId } from '../fs/textEncodings';
 import { useLspStore } from '../lsp/lspStore';
+import { isLspLanguage } from '../lsp/lspLanguages';
 import { pathSegmentsToUri } from '../lsp/uriTranslation';
 
 function detectEol(content: string): 'LF' | 'CRLF' {
@@ -115,28 +116,28 @@ export const useEditorTabsStore = create<EditorTabsState>((set, get) => ({
           openFiles: state.openFiles.map((f) => (f.id === id ? { ...f, isDirty: true } : f)),
         });
       }
-      if (language === 'rust') {
+      if (isLspLanguage(language)) {
         const rootUri = useLspStore.getState().rootUri;
-        if (rootUri) useLspStore.getState().notifyDidChange(pathSegmentsToUri(rootUri, node.pathSegments));
+        if (rootUri) {
+          useLspStore.getState().notifyDidChange(pathSegmentsToUri(rootUri, node.pathSegments), language);
+        }
       }
     });
 
-    // Lazily starts (or reuses) the rust-analyzer session on the first .rs
-    // file opened — auto-fetching lsp-host/rust-analyzer if needed — then
-    // sends textDocument/didOpen. Fire-and-forget: a failure just leaves
-    // this file without LSP features, surfaced via the status bar's LSP
-    // badge (see lspStore.ts's status/errorMessage), not a blocking error
-    // here.
-    if (language === 'rust') {
+    // Lazily starts (or reuses) the language-server session for supported
+    // languages, then sends textDocument/didOpen. Fire-and-forget keeps a
+    // missing external server from blocking file opening; the status bar
+    // surfaces the launch error.
+    if (isLspLanguage(language)) {
       void (async () => {
         try {
-          await useLspStore.getState().ensureSession();
+          await useLspStore.getState().ensureSession(language);
         } catch {
           return;
         }
         const rootUri = useLspStore.getState().rootUri;
         if (!rootUri) return;
-        useLspStore.getState().registerDocument(pathSegmentsToUri(rootUri, node.pathSegments), model, 'rust');
+        useLspStore.getState().registerDocument(pathSegmentsToUri(rootUri, node.pathSegments), model, language);
       })();
     }
 
@@ -149,7 +150,7 @@ export const useEditorTabsStore = create<EditorTabsState>((set, get) => ({
 
   closeFile: (id: string) => {
     const tab = get().openFiles.find((f) => f.id === id);
-    if (tab?.language === 'rust') {
+    if (tab && isLspLanguage(tab.language)) {
       const rootUri = useLspStore.getState().rootUri;
       if (rootUri) useLspStore.getState().unregisterDocument(pathSegmentsToUri(rootUri, tab.pathSegments));
     }
@@ -214,7 +215,7 @@ export const useEditorTabsStore = create<EditorTabsState>((set, get) => ({
     const toClose = get().openFiles.filter((f) => isPathPrefixMatch(pathPrefix, f.pathSegments));
     const rootUri = useLspStore.getState().rootUri;
     for (const tab of toClose) {
-      if (tab.language === 'rust' && rootUri) {
+      if (isLspLanguage(tab.language) && rootUri) {
         useLspStore.getState().unregisterDocument(pathSegmentsToUri(rootUri, tab.pathSegments));
       }
       tab.model.dispose();
@@ -237,10 +238,30 @@ export const useEditorTabsStore = create<EditorTabsState>((set, get) => ({
     set((state) => ({
       openFiles: state.openFiles.map((f) => {
         if (f.pathSegments.join('/') !== oldPathSegments.join('/')) return f;
+        const oldLanguage = f.language;
         const newPathSegments = [...f.pathSegments.slice(0, -1), newName];
         const language = languageFromFilename(newName);
+        const rootUri = useLspStore.getState().rootUri;
+        if (isLspLanguage(oldLanguage) && rootUri) {
+          useLspStore.getState().unregisterDocument(pathSegmentsToUri(rootUri, f.pathSegments));
+        }
         void ensureLanguageTokenization(language);
         monaco.editor.setModelLanguage(f.model, language);
+        if (isLspLanguage(language)) {
+          void (async () => {
+            try {
+              await useLspStore.getState().ensureSession(language);
+            } catch {
+              return;
+            }
+            const nextRootUri = useLspStore.getState().rootUri;
+            if (nextRootUri) {
+              useLspStore
+                .getState()
+                .registerDocument(pathSegmentsToUri(nextRootUri, newPathSegments), f.model, language);
+            }
+          })();
+        }
         return { ...f, name: newName, pathSegments: newPathSegments, language };
       }),
     }));
@@ -289,24 +310,30 @@ export const useEditorTabsStore = create<EditorTabsState>((set, get) => ({
   },
 }));
 
-// Re-registers every currently open .rs tab's document whenever lspStore
-// restarts the rust-analyzer session against a *different* root (the user
-// corrected the workspace root override from the status bar — see
-// lspStore.ts's setWorkspaceRootOverride). All previously constructed LSP
-// URIs are stale once the root changes, so every open rust document needs a
-// fresh textDocument/didOpen. Skips the very first ever sync — openFile()'s
-// own registerDocument call already handles that one, and firing again here
-// too would double-send didOpen for the file that triggered ensureSession.
+// Re-registers currently open documents after a language-server session is
+// restarted against a different root. Each language reports its own ready
+// event on the multiplexed connection, so only that language's documents are
+// sent after its initialize handshake completes.
 let syncedLspRootUri: string | null = null;
+const syncedLspLanguages = new Set<string>();
 useLspStore.subscribe((state) => {
-  if (state.status !== 'ready' || !state.rootUri || state.rootUri === syncedLspRootUri) return;
-  const isFirstSync = syncedLspRootUri === null;
+  if (state.status !== 'ready' || !state.rootUri || !state.readyLanguage || !isLspLanguage(state.readyLanguage)) return;
+  const rootChanged = state.rootUri !== syncedLspRootUri;
+  const hadPreviousRoot = syncedLspRootUri !== null;
+  if (rootChanged) syncedLspLanguages.clear();
   syncedLspRootUri = state.rootUri;
-  if (isFirstSync) return;
+  if (syncedLspLanguages.has(state.readyLanguage)) return;
+  syncedLspLanguages.add(state.readyLanguage);
+  // The first session for a language is registered by openFile() after its
+  // ensureSession() promise resolves. Re-registering here on that initial
+  // handshake would send duplicate didOpen notifications. A root change is
+  // different: tracked documents were intentionally cleared, so they must
+  // be restored here after the new server initializes.
+  if (!hadPreviousRoot || !rootChanged) return;
 
   const rootUri = state.rootUri;
   for (const tab of useEditorTabsStore.getState().openFiles) {
-    if (tab.language !== 'rust') continue;
-    useLspStore.getState().registerDocument(pathSegmentsToUri(rootUri, tab.pathSegments), tab.model, 'rust');
+    if (tab.language !== state.readyLanguage) continue;
+    useLspStore.getState().registerDocument(pathSegmentsToUri(rootUri, tab.pathSegments), tab.model, tab.language);
   }
 });

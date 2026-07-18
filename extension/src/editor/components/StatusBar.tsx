@@ -14,6 +14,8 @@ function LspBadge() {
   const [open, setOpen] = useState(false);
   const status = useLspStore((s) => s.status);
   const fetchProgress = useLspStore((s) => s.fetchProgress);
+  const installLanguage = useLspStore((s) => s.installLanguage);
+  const installMessage = useLspStore((s) => s.installMessage);
   const errorMessage = useLspStore((s) => s.errorMessage);
   const rootUri = useLspStore((s) => s.rootUri);
   const serverVersion = useLspStore((s) => s.serverVersion);
@@ -63,6 +65,8 @@ function LspBadge() {
           ? fetchProgress?.total
             ? `取得中 ${Math.round((fetchProgress.downloaded / fetchProgress.total) * 100)}%`
             : '取得中...'
+          : status === 'installing'
+            ? `${installLanguage ?? 'LSP'} を準備中...`
           : 'LSP 起動中...';
 
   return (
@@ -83,6 +87,7 @@ function LspBadge() {
           <div className="status-bar-dropdown-detail">状態: {status}</div>
           {serverVersion && <div className="status-bar-dropdown-detail">バージョン: {serverVersion}</div>}
           {rootUri && <div className="status-bar-dropdown-detail">root: {rootUri}</div>}
+          {installMessage && <div className="status-bar-dropdown-detail">{installMessage}</div>}
           {errorMessage && <div className="status-bar-dropdown-detail status-bar-dropdown-detail-error">{errorMessage}</div>}
           <div className="status-bar-dropdown-heading">ワークスペースルートを指定</div>
           <div className="status-bar-dropdown-detail status-bar-lsp-root-hint">

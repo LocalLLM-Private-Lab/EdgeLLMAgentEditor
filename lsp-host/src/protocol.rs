@@ -39,10 +39,30 @@ pub enum ServerMessage {
     /// up (spawned fresh, or an already-running one reused). `root_uri` is
     /// the requested workspace root as a `file://` URI, or this host's launch
     /// directory when no override was supplied.
-    Ready { language: String, root_uri: String },
-    FetchProgress { downloaded: u64, total: Option<u64> },
-    FetchError { message: String },
-    Lsp { language: String, payload: serde_json::Value },
-    ProcessExited { language: String, code: Option<i32> },
-    Error { message: String },
+    Ready {
+        language: String,
+        root_uri: String,
+    },
+    FetchProgress {
+        downloaded: u64,
+        total: Option<u64>,
+    },
+    InstallProgress {
+        language: String,
+        message: String,
+    },
+    FetchError {
+        message: String,
+    },
+    Lsp {
+        language: String,
+        payload: serde_json::Value,
+    },
+    ProcessExited {
+        language: String,
+        code: Option<i32>,
+    },
+    Error {
+        message: String,
+    },
 }

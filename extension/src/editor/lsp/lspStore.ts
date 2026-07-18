@@ -7,13 +7,15 @@ import { isLspLanguage } from './lspLanguages';
 import { type LspRange, lspRangeToMonaco, normalizeUriKey } from './uriTranslation';
 import { getStoredValue, setStoredValue } from '../../shared/chromeStorage';
 
-export type LspStatus = 'idle' | 'connecting' | 'fetching' | 'starting' | 'ready' | 'error';
+export type LspStatus = 'idle' | 'connecting' | 'fetching' | 'installing' | 'starting' | 'ready' | 'error';
 
 const WORKSPACE_ROOT_STORAGE_KEY = 'lspWorkspaceRootOverride';
 
 interface LspState {
   status: LspStatus;
   fetchProgress: { downloaded: number; total: number | null } | null;
+  installLanguage: string | null;
+  installMessage: string | null;
   errorMessage: string | null;
   rootUri: string | null;
   serverVersion: string | null;
@@ -179,6 +181,8 @@ async function performInitialize(
       readyLanguage: language,
       serverVersion: result?.serverInfo?.version ?? null,
       errorMessage: null,
+      installLanguage: null,
+      installMessage: null,
     });
     sessionDeferreds.get(language)?.resolve();
     sessionDeferreds.delete(language);
@@ -205,6 +209,14 @@ function handleServerMessage(msg: ServerMessage, set: (partial: Partial<LspState
       break;
     case 'fetch_progress':
       set({ status: 'fetching', fetchProgress: { downloaded: msg.downloaded, total: msg.total } });
+      break;
+    case 'install_progress':
+      set({
+        status: 'installing',
+        installLanguage: msg.language,
+        installMessage: msg.message,
+        fetchProgress: null,
+      });
       break;
     case 'fetch_error': {
       const error = new Error(msg.message);
@@ -293,7 +305,13 @@ function connect(
 async function ensureConnection(set: (partial: Partial<LspState>) => void): Promise<void> {
   if (connectionPromise) return connectionPromise;
   connectionPromise = (async () => {
-    set({ status: 'connecting', errorMessage: null, fetchProgress: null });
+    set({
+      status: 'connecting',
+      errorMessage: null,
+      fetchProgress: null,
+      installLanguage: null,
+      installMessage: null,
+    });
     const launch = await launchLspHostViaNativeMessaging();
     if (launch.status !== 'started' && launch.status !== 'already_running') {
       const message =
@@ -346,6 +364,8 @@ function openLanguageSession(
 export const useLspStore = create<LspState>((set, get) => ({
   status: 'idle',
   fetchProgress: null,
+  installLanguage: null,
+  installMessage: null,
   errorMessage: null,
   rootUri: null,
   serverVersion: null,

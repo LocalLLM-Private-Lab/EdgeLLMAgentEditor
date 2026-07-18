@@ -1,19 +1,19 @@
 use axum::{
+    Router,
     extract::{
-        ws::{Message, WebSocket, WebSocketUpgrade},
         State,
+        ws::{Message, WebSocket, WebSocketUpgrade},
     },
     http::{HeaderMap, StatusCode},
     response::IntoResponse,
     routing::get,
-    Router,
 };
 use futures_util::{SinkExt, StreamExt};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::sync::Arc;
-use tokio::sync::{mpsc, Mutex};
+use std::sync::{Arc, OnceLock};
+use tokio::sync::{Mutex, mpsc};
 
 use crate::auth::is_authorized;
 use crate::config::HostConfig;
@@ -74,24 +74,110 @@ struct ActiveSession {
     root_dir: PathBuf,
 }
 
+#[derive(Clone, Copy)]
+enum AutoInstall {
+    Npm {
+        packages: &'static [&'static str],
+        executable: &'static str,
+    },
+    Gem {
+        package: &'static str,
+        executable: &'static str,
+    },
+    Clangd,
+}
+
+#[derive(Clone, Copy)]
+struct ExternalServerCandidate {
+    program: &'static str,
+    args: &'static [&'static str],
+    auto_install: Option<AutoInstall>,
+}
+
+const EMPTY_ARGS: &[&str] = &[];
+const STDIO_ARGS: &[&str] = &["--stdio"];
+const SOLARGRAPH_ARGS: &[&str] = &["stdio"];
+const PYRIGHT_PACKAGES: &[&str] = &["pyright"];
+const WEB_PACKAGES: &[&str] = &["vscode-langservers-extracted"];
+const TYPESCRIPT_PACKAGES: &[&str] = &["typescript", "typescript-language-server"];
+
+// Package-manager operations are serialized because npm and RubyGems both
+// update shared user-level metadata. Separate language sessions can still
+// run concurrently once their servers are installed.
+static INSTALL_LOCK: OnceLock<Mutex<()>> = OnceLock::new();
+
+fn install_lock() -> &'static Mutex<()> {
+    INSTALL_LOCK.get_or_init(|| Mutex::new(()))
+}
+
 /// Returns the external executable candidates for a language. The `.cmd`
 /// variants are important on Windows because npm global binaries are command
 /// files rather than native executables; `resolve_program` handles them via
 /// cmd.exe after locating them on PATH.
-fn external_server_candidates(language: &str) -> Vec<(&'static str, Vec<&'static str>)> {
+fn external_server_candidates(language: &str) -> Vec<ExternalServerCandidate> {
     match language {
-        "c" | "cpp" => vec![("clangd", vec![])],
+        "c" | "cpp" => vec![ExternalServerCandidate {
+            program: "clangd",
+            args: EMPTY_ARGS,
+            auto_install: Some(AutoInstall::Clangd),
+        }],
         "python" => vec![
-            ("pyright-langserver", vec!["--stdio"]),
-            ("pylsp", vec![]),
+            ExternalServerCandidate {
+                program: "pyright-langserver",
+                args: STDIO_ARGS,
+                auto_install: Some(AutoInstall::Npm {
+                    packages: PYRIGHT_PACKAGES,
+                    executable: "pyright-langserver",
+                }),
+            },
+            ExternalServerCandidate {
+                program: "pylsp",
+                args: EMPTY_ARGS,
+                auto_install: None,
+            },
         ],
         "ruby" => vec![
-            ("solargraph", vec!["stdio"]),
-            ("ruby-lsp", vec![]),
+            ExternalServerCandidate {
+                program: "solargraph",
+                args: SOLARGRAPH_ARGS,
+                auto_install: Some(AutoInstall::Gem {
+                    package: "solargraph",
+                    executable: "solargraph",
+                }),
+            },
+            ExternalServerCandidate {
+                program: "ruby-lsp",
+                args: EMPTY_ARGS,
+                auto_install: Some(AutoInstall::Gem {
+                    package: "ruby-lsp",
+                    executable: "ruby-lsp",
+                }),
+            },
         ],
-        "html" => vec![("vscode-html-language-server", vec!["--stdio"])],
-        "css" => vec![("vscode-css-language-server", vec!["--stdio"])],
-        "javascript" | "typescript" => vec![("typescript-language-server", vec!["--stdio"])],
+        "html" => vec![ExternalServerCandidate {
+            program: "vscode-html-language-server",
+            args: STDIO_ARGS,
+            auto_install: Some(AutoInstall::Npm {
+                packages: WEB_PACKAGES,
+                executable: "vscode-html-language-server",
+            }),
+        }],
+        "css" => vec![ExternalServerCandidate {
+            program: "vscode-css-language-server",
+            args: STDIO_ARGS,
+            auto_install: Some(AutoInstall::Npm {
+                packages: WEB_PACKAGES,
+                executable: "vscode-css-language-server",
+            }),
+        }],
+        "javascript" | "typescript" => vec![ExternalServerCandidate {
+            program: "typescript-language-server",
+            args: STDIO_ARGS,
+            auto_install: Some(AutoInstall::Npm {
+                packages: TYPESCRIPT_PACKAGES,
+                executable: "typescript-language-server",
+            }),
+        }],
         _ => vec![],
     }
 }
@@ -99,37 +185,247 @@ fn external_server_candidates(language: &str) -> Vec<(&'static str, Vec<&'static
 fn resolve_program(program: &str) -> anyhow::Result<PathBuf> {
     let lookup = if cfg!(windows) { "where.exe" } else { "which" };
     let output = Command::new(lookup).arg(program).output()?;
-    if !output.status.success() {
-        anyhow::bail!("executable not found on PATH: {program}");
+    if output.status.success() {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let path = stdout
+            .lines()
+            .map(str::trim)
+            .find(|line| !line.is_empty())
+            .map(PathBuf::from);
+        if let Some(path) = path {
+            return Ok(path);
+        }
     }
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    let path = stdout
-        .lines()
-        .map(str::trim)
-        .find(|line| !line.is_empty())
-        .ok_or_else(|| anyhow::anyhow!("executable not found on PATH: {program}"))?;
-    Ok(PathBuf::from(path))
+
+    if cfg!(windows) && program == "clangd" {
+        if let Some(program_files) = std::env::var_os("ProgramFiles") {
+            let path = PathBuf::from(program_files)
+                .join("LLVM")
+                .join("bin")
+                .join("clangd.exe");
+            if path.is_file() {
+                return Ok(path);
+            }
+        }
+    }
+
+    anyhow::bail!("executable not found on PATH: {program}")
 }
 
-fn spawn_external_server(
-    program: &str,
+fn npm_root() -> PathBuf {
+    dirs::data_local_dir()
+        .unwrap_or_else(std::env::temp_dir)
+        .join("EdgeLLMAgentEditor")
+        .join("lsp-host")
+        .join("servers")
+        .join("npm")
+}
+
+fn npm_bin_path(executable: &str) -> PathBuf {
+    let suffix = if cfg!(windows) { ".cmd" } else { "" };
+    npm_root()
+        .join("node_modules")
+        .join(".bin")
+        .join(format!("{executable}{suffix}"))
+}
+
+fn quote_command_arg(arg: &str) -> String {
+    if !arg.is_empty()
+        && arg
+            .chars()
+            .all(|ch| !ch.is_whitespace() && !matches!(ch, '"' | '&' | '|' | '<' | '>' | '^'))
+    {
+        return arg.to_string();
+    }
+    format!("\"{}\"", arg.replace('"', "\\\""))
+}
+
+fn run_program(
+    resolved: &Path,
+    args: &[String],
+    current_dir: Option<&Path>,
+) -> anyhow::Result<std::process::Output> {
+    let is_cmd = resolved
+        .extension()
+        .is_some_and(|ext| ext.eq_ignore_ascii_case("cmd") || ext.eq_ignore_ascii_case("bat"));
+
+    let mut command;
+    if is_cmd {
+        let mut command_line = quote_command_arg(&resolved.to_string_lossy());
+        for arg in args {
+            command_line.push(' ');
+            command_line.push_str(&quote_command_arg(arg));
+        }
+        command = Command::new("cmd.exe");
+        command.args(["/d", "/s", "/c", &command_line]);
+    } else {
+        command = Command::new(resolved);
+        command.args(args);
+    }
+
+    if let Some(dir) = current_dir {
+        command.current_dir(dir);
+    }
+    let output = command.output()?;
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        anyhow::bail!(
+            "command exited with {}{}",
+            output.status,
+            if stderr.is_empty() {
+                String::new()
+            } else {
+                format!(": {stderr}")
+            }
+        );
+    }
+    Ok(output)
+}
+
+fn gem_user_bin(executable: &str) -> anyhow::Result<PathBuf> {
+    let gem = resolve_program("gem")?;
+    let output = run_program(&gem, &["env".into(), "user_gemhome".into()], None)?;
+    let home = String::from_utf8_lossy(&output.stdout).trim().to_string();
+    if home.is_empty() {
+        anyhow::bail!("RubyGems did not return a user gem home")
+    }
+    let suffix = if cfg!(windows) { ".bat" } else { "" };
+    Ok(PathBuf::from(home)
+        .join("bin")
+        .join(format!("{executable}{suffix}")))
+}
+
+fn auto_install_description(spec: AutoInstall) -> String {
+    match spec {
+        AutoInstall::Npm { packages, .. } => {
+            format!("npmで {} をユーザー領域へ導入中", packages.join(", "))
+        }
+        AutoInstall::Gem { package, .. } => format!("RubyGemsで {package} をユーザー領域へ導入中"),
+        AutoInstall::Clangd => "clangdを利用可能なOSパッケージマネージャーから導入中".into(),
+    }
+}
+
+fn installed_program(spec: AutoInstall) -> anyhow::Result<PathBuf> {
+    match spec {
+        AutoInstall::Npm { executable, .. } => {
+            let local = npm_bin_path(executable);
+            if local.is_file() {
+                return Ok(local);
+            }
+            resolve_program(executable)
+        }
+        AutoInstall::Gem { executable, .. } => {
+            if let Ok(local) = gem_user_bin(executable)
+                && local.is_file()
+            {
+                return Ok(local);
+            }
+            resolve_program(executable)
+        }
+        AutoInstall::Clangd => resolve_program("clangd"),
+    }
+}
+
+fn install_npm(packages: &'static [&'static str]) -> anyhow::Result<()> {
+    let npm = resolve_program("npm")?;
+    std::fs::create_dir_all(npm_root())?;
+    let mut args = vec![
+        "install".to_string(),
+        "--prefix".to_string(),
+        npm_root().to_string_lossy().into_owned(),
+        "--no-package-lock".to_string(),
+        "--no-save".to_string(),
+    ];
+    args.extend(packages.iter().map(|package| (*package).to_string()));
+    run_program(&npm, &args, None)?;
+    Ok(())
+}
+
+fn install_gem(package: &'static str) -> anyhow::Result<()> {
+    let gem = resolve_program("gem")?;
+    run_program(
+        &gem,
+        &[
+            "install".into(),
+            "--user-install".into(),
+            "--no-document".into(),
+            package.into(),
+        ],
+        None,
+    )?;
+    Ok(())
+}
+
+fn install_clangd() -> anyhow::Result<()> {
+    let managers: Vec<(&str, Vec<String>)> = if cfg!(windows) {
+        vec![
+            (
+                "winget",
+                vec![
+                    "install".into(),
+                    "--id".into(),
+                    "LLVM.LLVM".into(),
+                    "--exact".into(),
+                    "--accept-source-agreements".into(),
+                    "--accept-package-agreements".into(),
+                ],
+            ),
+            ("scoop", vec!["install".into(), "llvm".into()]),
+            ("choco", vec!["install".into(), "llvm".into(), "-y".into()]),
+        ]
+    } else if cfg!(target_os = "macos") {
+        vec![("brew", vec!["install".into(), "llvm".into()])]
+    } else {
+        Vec::new()
+    };
+
+    let mut errors = Vec::new();
+    for (manager, args) in managers {
+        let Ok(program) = resolve_program(manager) else {
+            continue;
+        };
+        match run_program(&program, &args, None) {
+            Ok(_) => return Ok(()),
+            Err(err) => errors.push(format!("{manager}: {err}")),
+        }
+    }
+
+    if cfg!(target_os = "linux") {
+        anyhow::bail!("clangdが見つかりません。apt/dnf/pacman等でclangdを導入してください")
+    }
+    anyhow::bail!(
+        "clangdを自動導入できません。winget/scoop/choco(Windows)またはbrew(macOS)を用意してください。{}",
+        if errors.is_empty() {
+            String::new()
+        } else {
+            format!(" {}", errors.join("; "))
+        }
+    )
+}
+
+fn install_auto(spec: AutoInstall) -> anyhow::Result<()> {
+    match spec {
+        AutoInstall::Npm { packages, .. } => install_npm(packages),
+        AutoInstall::Gem { package, .. } => install_gem(package),
+        AutoInstall::Clangd => install_clangd(),
+    }
+}
+
+fn spawn_resolved_server(
+    resolved: &Path,
     args: &[&str],
     root_dir: &Path,
     language: &str,
     out_tx: mpsc::UnboundedSender<ServerMessage>,
 ) -> anyhow::Result<LanguageServerSession> {
-    let resolved = resolve_program(program)?;
     let is_cmd = resolved
         .extension()
         .is_some_and(|ext| ext.eq_ignore_ascii_case("cmd") || ext.eq_ignore_ascii_case("bat"));
 
     if !is_cmd {
-        return LanguageServerSession::spawn(&resolved, args, root_dir, language, out_tx);
+        return LanguageServerSession::spawn(resolved, args, root_dir, language, out_tx);
     }
 
-    // Command files need a shell on Windows. The arguments used by the
-    // supported language servers are fixed, so a single quoted command line
-    // is sufficient and avoids passing an arbitrary user string to cmd.exe.
     let mut command_line = format!("\"{}\"", resolved.display());
     if !args.is_empty() {
         command_line.push(' ');
@@ -143,6 +439,17 @@ fn spawn_external_server(
         language,
         out_tx,
     )
+}
+
+fn spawn_external_server(
+    program: &str,
+    args: &[&str],
+    root_dir: &Path,
+    language: &str,
+    out_tx: mpsc::UnboundedSender<ServerMessage>,
+) -> anyhow::Result<LanguageServerSession> {
+    let resolved = resolve_program(program)?;
+    spawn_resolved_server(&resolved, args, root_dir, language, out_tx)
 }
 
 async fn ensure_language_server_session(
@@ -168,14 +475,69 @@ async fn ensure_language_server_session(
         anyhow::bail!("unsupported language: {language}");
     }
     let mut errors = Vec::new();
-    for (program, args) in candidates {
-        match spawn_external_server(program, &args, &root_dir, language, out_tx.clone()) {
+    for candidate in candidates.iter().copied() {
+        match spawn_external_server(
+            candidate.program,
+            candidate.args,
+            &root_dir,
+            language,
+            out_tx.clone(),
+        ) {
             Ok(server) => return Ok(server),
-            Err(err) => errors.push(format!("{program}: {err}")),
+            Err(err) => errors.push(format!("{}: {err}", candidate.program)),
+        }
+    }
+
+    let installable = candidates
+        .iter()
+        .copied()
+        .filter_map(|candidate| candidate.auto_install.map(|spec| (candidate, spec)))
+        .collect::<Vec<_>>();
+    if !installable.is_empty() {
+        let _install_guard = install_lock().lock().await;
+        for (candidate, spec) in installable {
+            if let Ok(program) = installed_program(spec)
+                && let Ok(server) = spawn_resolved_server(
+                    &program,
+                    candidate.args,
+                    &root_dir,
+                    language,
+                    out_tx.clone(),
+                )
+            {
+                return Ok(server);
+            }
+
+            let _ = out_tx.send(ServerMessage::InstallProgress {
+                language: language.to_string(),
+                message: auto_install_description(spec),
+            });
+            let result = tokio::task::spawn_blocking(move || install_auto(spec)).await?;
+            match result {
+                Ok(()) => {
+                    let program = installed_program(spec).map_err(|err| {
+                        anyhow::anyhow!(
+                            "インストール後に{}を見つけられません: {err}",
+                            candidate.program
+                        )
+                    })?;
+                    match spawn_resolved_server(
+                        &program,
+                        candidate.args,
+                        &root_dir,
+                        language,
+                        out_tx.clone(),
+                    ) {
+                        Ok(server) => return Ok(server),
+                        Err(err) => errors.push(format!("{}: {err}", candidate.program)),
+                    }
+                }
+                Err(err) => errors.push(format!("自動導入: {err}")),
+            }
         }
     }
     anyhow::bail!(
-        "No language server found for {language}. Install one of the supported servers and ensure it is on PATH. {}",
+        "No language server found for {language}. PATH上のサーバーを導入するか、自動導入に必要なパッケージマネージャーを用意してください. {}",
         errors.join("; ")
     )
 }
@@ -222,7 +584,9 @@ async fn handle_socket(socket: WebSocket) {
                     continue;
                 }
 
-                let requested_root = workspace_root.map(PathBuf::from).unwrap_or_else(default_root_dir);
+                let requested_root = workspace_root
+                    .map(PathBuf::from)
+                    .unwrap_or_else(default_root_dir);
                 if !requested_root.is_dir() {
                     let _ = out_tx.send(ServerMessage::Error {
                         message: format!("フォルダが見つかりません: {}", requested_root.display()),
@@ -245,7 +609,10 @@ async fn handle_socket(socket: WebSocket) {
                     // All language sessions share one workspace root. If the
                     // root changes, restart every server so their indexes and
                     // file URIs stay consistent.
-                    if guard.values().any(|active| active.root_dir != requested_root) {
+                    if guard
+                        .values()
+                        .any(|active| active.root_dir != requested_root)
+                    {
                         for (_, mut active) in guard.drain() {
                             let _ = active.server.kill();
                         }

@@ -13,6 +13,7 @@ export type ClientMessage =
 export type ServerMessage =
   | { type: 'ready'; language: string; root_uri: string }
   | { type: 'fetch_progress'; downloaded: number; total: number | null }
+  | { type: 'install_progress'; language: string; message: string }
   | { type: 'fetch_error'; message: string }
   | { type: 'lsp'; language: string; payload: unknown }
   | { type: 'process_exited'; language: string; code: number | null }

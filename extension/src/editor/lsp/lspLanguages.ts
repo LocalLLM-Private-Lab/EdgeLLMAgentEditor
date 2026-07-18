@@ -1,6 +1,7 @@
 /** Language ids supported by the language-server multiplexer. Makefile and
- * Dockerfile intentionally stay syntax-only for now; unlike the other entries
- * there is no universally available LSP executable to launch on Windows. */
+ * Dockerfile stay syntax-only because neither has a broadly interoperable
+ * language server. The host automatically resolves or installs the server for
+ * the entries below when the corresponding file is opened. */
 export const LSP_LANGUAGE_IDS = [
   'rust',
   'c',

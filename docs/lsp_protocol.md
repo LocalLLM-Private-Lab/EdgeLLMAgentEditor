@@ -40,6 +40,7 @@
 |---|---|---|
 | `ready` | `language, root_uri` | 指定言語の言語サーバープロセスが起動完了。`root_uri` は選択されたワークスペースルートを `file:///` 形式にしたもの |
 | `fetch_progress` | `downloaded, total?` | rust-analyzer未キャッシュ時のダウンロード進捗(バイト単位)。`total` はContent-Lengthが取れない場合`null` |
+| `install_progress` | `language, message` | 非Rustの言語サーバーをユーザー領域へ自動導入中。Node/Ruby/OSパッケージマネージャーの処理状況 |
 | `fetch_error` | `message` | 自動フェッチ失敗 |
 | `lsp` | `language, payload` | 指定言語の言語サーバーstdoutから届いた生のLSP JSON-RPCオブジェクト |
 | `process_exited` | `language, code` | 指定言語の言語サーバープロセスの読み取りループがEOFに達した(v1では `code` は常に `null`) |
@@ -47,7 +48,7 @@
 
 ## 現在利用できるLSP機能
 
-`lsp-host`はLSPメッセージを解釈せず中継し、以下の機能を拡張機能側のMonacoプロバイダで提供する。Rust以外の言語サーバーはPATH上の実行ファイルを起動する。
+`lsp-host`はLSPメッセージを解釈せず中継し、以下の機能を拡張機能側のMonacoプロバイダで提供する。ファイル名から決まるMonaco言語IDをそのままLSP言語IDとして使い、対象ファイルを開いた時点で対応するセッションを自動選択する。
 
 - 定義ジャンプ、宣言ジャンプ、実装ジャンプ、型定義ジャンプ
 - ホバー説明
@@ -62,12 +63,12 @@
 | 言語 | 起動するサーバー | 備考 |
 |---|---|---|
 | Rust | `rust-analyzer` | 未キャッシュ時はホストが自動取得 |
-| C/C++ | `clangd` | LLVM/clangdをPATHへ追加 |
-| Python | `pyright-langserver --stdio` または `pylsp` | 先に見つかった方を使用 |
-| Ruby | `solargraph stdio` または `ruby-lsp` | 先に見つかった方を使用 |
-| HTML | `vscode-html-language-server --stdio` | npm等で導入 |
-| CSS | `vscode-css-language-server --stdio` | npm等で導入 |
-| JavaScript/TypeScript | `typescript-language-server --stdio` | npm等で導入 |
+| C/C++ | `clangd` | PATHを優先。無ければwinget/scoop/choco(Windows)またはbrew(macOS)から自動導入 |
+| Python | `pyright-langserver --stdio` または `pylsp` | PATHを優先。無ければnpmのユーザー領域へPyrightを自動導入 |
+| Ruby | `solargraph stdio` または `ruby-lsp` | PATHを優先。無ければRubyGemsの`--user-install`で自動導入 |
+| HTML | `vscode-html-language-server --stdio` | PATHを優先。無ければnpmのユーザー領域へ自動導入 |
+| CSS | `vscode-css-language-server --stdio` | PATHを優先。無ければnpmのユーザー領域へ自動導入 |
+| JavaScript/TypeScript | `typescript-language-server --stdio` | PATHを優先。無ければTypeScriptとサーバーをnpmのユーザー領域へ自動導入 |
 
 MakefileとDockerfileはシンタックスカラーに対応しているが、LSPは未対応。
 
@@ -93,7 +94,7 @@ MakefileとDockerfileはシンタックスカラーに対応しているが、LS
 
 ## 既知の制約
 
-- Rust以外の言語サーバーは自動ダウンロードせず、ユーザー環境のPATHから解決する。未インストールの場合はステータスバーにエラーを表示する。
+- Rust以外の言語サーバーはまずユーザー環境のPATHから解決し、未インストールの場合はユーザー領域への自動導入を試みる。Node系には`npm`、Rubyには`gem`、C/C++にはWindowsなら`winget`/`scoop`/`choco`、macOSなら`brew`が必要。LinuxのclangdはOSのパッケージマネージャーで事前導入する必要がある。自動導入の進捗と失敗理由はステータスバーに表示する。
 - `workspace_root`を指定しない場合のrootUriはプロセス起動ディレクトリになり、ブラウザ側FSAワークスペースと手動で一致させる必要がある。ステータスバーから絶対パスを指定すれば変更できる。
 - WebSocket接続が切れるとプロセスごと終了する(セッション永続化は未対応)。
 - Rustの自動フェッチはGitHub Releases APIへの外部HTTPS通信を必要とする(`terminal-host`には無かった新しい能力)。一度キャッシュ済みになれば、以降のRust `open_session`はネットワークアクセスなしでキャッシュ済みバイナリを再利用する(`fetch::find_cached_exe()`)。

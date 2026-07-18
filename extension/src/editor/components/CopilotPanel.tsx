@@ -2,10 +2,11 @@ import { useState } from 'react';
 import { useEditorTabsStore } from '../state/editorTabsStore';
 import { useWorkspaceStore } from '../state/workspaceStore';
 import { usePromptTemplateStore } from '../state/promptTemplateStore';
-import { buildFileEditPrompt } from '../copilot/promptTemplates';
+import { buildFileEditPrompt, buildToolResultPrompt } from '../copilot/promptTemplates';
 import { buildRepoMap } from '../copilot/repoMap';
 import { extractCodeBlocks, type ExtractedCodeBlock } from '../copilot/codeBlockParser';
-import { detectNeedFilesRequest } from '../copilot/responseControl';
+import { detectNeedFilesRequest, detectGrepRequest, detectListFilesRequest } from '../copilot/responseControl';
+import { runGrepSearch, runListFiles } from '../copilot/localTools';
 import {
   prepareApplyToTreeNode,
   prepareApplyForNewFile,
@@ -96,6 +97,36 @@ export function CopilotPanel() {
       });
       return;
     }
+
+    if (rootHandle) {
+      const grepPattern = detectGrepRequest(pastedResponse);
+      if (grepPattern) {
+        setBlocks([]);
+        setPastedResponse('');
+        setJustCopiedPrompt(false);
+        setStatus(`「${grepPattern}」を検索中...`);
+        void runGrepSearch(rootHandle, grepPattern).then(async (result) => {
+          await navigator.clipboard.writeText(buildToolResultPrompt('検索(grep)', grepPattern, result));
+          setJustCopiedPrompt(true);
+          setStatus('検索結果を踏まえたプロンプトをコピーしました。');
+        });
+        return;
+      }
+
+      const listQuery = detectListFilesRequest(pastedResponse);
+      if (listQuery !== null) {
+        setBlocks([]);
+        setPastedResponse('');
+        setJustCopiedPrompt(false);
+        setStatus('ファイル一覧を取得中...');
+        void runListFiles(rootHandle, listQuery).then(async (result) => {
+          await navigator.clipboard.writeText(buildToolResultPrompt('ファイル一覧', listQuery, result));
+          setJustCopiedPrompt(true);
+          setStatus('ファイル一覧を踏まえたプロンプトをコピーしました。');
+        });
+        return;
+      }
+    }
     setJustCopiedPrompt(false);
     const parsed = extractCodeBlocks(pastedResponse);
     setBlocks(parsed);
@@ -162,6 +193,16 @@ export function CopilotPanel() {
       ) : (
         <>
       <div className="copilot-sections-column">
+      {(justCopiedPrompt || blocks.length > 0) && instruction.trim() && (
+        <div className="copilot-progress-bar">
+          <span className="copilot-progress-goal" title={instruction}>
+            {instruction}
+          </span>
+          <span className="copilot-progress-count">
+            {blocks.length > 0 ? '③ 解析結果を確認中' : '② 回答待ち'}
+          </span>
+        </div>
+      )}
       <div className="copilot-section">
         <div className="copilot-section-title">① プロンプト作成</div>
         <div className="copilot-hint">
@@ -204,7 +245,7 @@ export function CopilotPanel() {
               リポジトリ構成(repomap)を含める
             </label>
             <div className="copilot-actions">
-              <button disabled={!instruction.trim()} onClick={() => void handleCopyPrompt()}>
+              <button className="primary" disabled={!instruction.trim()} onClick={() => void handleCopyPrompt()}>
                 クリップボードにコピー
               </button>
             </div>
@@ -231,7 +272,7 @@ export function CopilotPanel() {
           onChange={(e) => setPastedResponse(e.target.value)}
         />
         <div className="copilot-actions">
-          <button disabled={!pastedResponse.trim()} onClick={handleParseResponse}>
+          <button className="primary" disabled={!pastedResponse.trim()} onClick={handleParseResponse}>
             コードブロックを解析
           </button>
         </div>
@@ -245,7 +286,9 @@ export function CopilotPanel() {
           <>
           {blocks.length > 0 && (
             <div className="copilot-actions">
-              <button onClick={() => void handleApplyAll()}>すべて適用</button>
+              <button className="primary" onClick={() => void handleApplyAll()}>
+                すべて適用
+              </button>
             </div>
           )}
           {blocks.map((block) => (

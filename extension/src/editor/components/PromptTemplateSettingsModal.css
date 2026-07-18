@@ -50,7 +50,7 @@
 
 .prompt-template-list-item.active {
   background: var(--accent-color);
-  color: #fff;
+  color: var(--accent-fg);
 }
 
 .prompt-template-list-name {

@@ -1,14 +1,16 @@
 .plan-step-card {
   border: 1px solid var(--border-color);
-  padding: 8px;
+  border-radius: var(--radius-md);
+  background: var(--editor-bg);
+  padding: 8px 10px;
   display: flex;
   flex-direction: column;
   gap: 6px;
-  margin-bottom: 8px;
 }
 
 .plan-step-card.active {
   border-color: var(--accent-color);
+  box-shadow: 0 0 0 1px var(--accent-color);
 }
 
 .plan-step-header {
@@ -36,7 +38,8 @@
 .plan-step-status {
   font-size: 10px;
   padding: 2px 6px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
   white-space: nowrap;
 }
 
@@ -44,16 +47,19 @@
   margin-right: 3px;
 }
 
-
 .plan-step-status-pending {
   background: var(--panel-bg);
-  border: 1px solid var(--border-color);
+  border-color: var(--border-color);
 }
 
 .plan-step-status-in-progress {
-  background: #78350f;
+  background: var(--warning-bg);
+  color: var(--warning-fg);
+  border-color: var(--warning-border);
 }
 
 .plan-step-status-done {
-  background: #14532d;
+  background: var(--success-bg);
+  color: var(--success-fg);
+  border-color: var(--success-border);
 }

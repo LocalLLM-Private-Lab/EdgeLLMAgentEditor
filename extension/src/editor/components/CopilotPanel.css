@@ -21,6 +21,7 @@
   font-size: 12px;
   background: none;
   border: none;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
   color: inherit;
   cursor: pointer;
   opacity: 0.7;
@@ -29,7 +30,6 @@
 .copilot-subtabs button.active {
   opacity: 1;
   background: var(--editor-bg);
-  border-radius: 3px 3px 0 0;
   font-weight: 600;
 }
 
@@ -38,8 +38,98 @@
   min-height: 0;
   display: flex;
   flex-direction: column;
-  gap: 14px;
+  gap: 12px;
   overflow-y: auto;
+}
+
+/* "Frozen header row" for whichever scroll container it's the first
+   child of (quick tab's .copilot-sections-column, or plan tab's
+   .plan-panel) — stays visible so what you're working on (instruction /
+   goal) and how far along you are is never scrolled out of view. */
+.copilot-progress-bar {
+  position: sticky;
+  top: 0;
+  margin-top: 8px;
+  z-index: 2;
+  background: var(--panel-bg);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 8px 10px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 11px;
+}
+
+.copilot-progress-goal {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  opacity: 0.85;
+}
+
+.copilot-progress-count {
+  flex-shrink: 0;
+  font-weight: 600;
+  opacity: 0.8;
+}
+
+/* Baseline for every control inside the Copilot panel (quick tab, plan
+   tab, and its step cards all nest under .copilot-panel) — kept scoped
+   here rather than a global `button {}` rule so it doesn't reach into
+   the editor/file-tree side of the app. */
+.copilot-panel button {
+  font-family: inherit;
+  font-size: 12px;
+  padding: 5px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-color);
+  background: var(--editor-bg);
+  color: var(--text-color);
+  cursor: pointer;
+  transition: background-color 0.12s ease, border-color 0.12s ease, filter 0.12s ease;
+}
+
+.copilot-panel button:hover:not(:disabled) {
+  background: var(--row-hover-bg);
+  border-color: var(--accent-color);
+}
+
+.copilot-panel button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+
+/* Marks the one action that actually moves the current section forward
+   (copy prompt, parse response, apply) so the eye lands on it first. */
+.copilot-panel button.primary {
+  background: var(--accent-color);
+  border-color: var(--accent-color);
+  color: var(--accent-fg);
+  font-weight: 600;
+}
+
+.copilot-panel button.primary:hover:not(:disabled) {
+  filter: brightness(1.1);
+}
+
+.copilot-panel textarea,
+.copilot-panel select,
+.copilot-panel input[type='text'] {
+  font-family: inherit;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--editor-bg);
+  color: var(--text-color);
+}
+
+.copilot-panel textarea:focus,
+.copilot-panel select:focus,
+.copilot-panel input[type='text']:focus {
+  outline: none;
+  border-color: var(--accent-color);
 }
 
 .copilot-section {
@@ -47,12 +137,15 @@
   display: flex;
   flex-direction: column;
   gap: 6px;
+  background: var(--editor-bg);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  padding: 10px;
 }
 
 .copilot-section-title {
   font-weight: 600;
   font-size: 12px;
-  opacity: 0.8;
 }
 
 .copilot-linked-tab {
@@ -69,7 +162,6 @@
 .copilot-instruction-input {
   min-height: 60px;
   resize: vertical;
-  font-family: inherit;
   font-size: 12px;
   padding: 6px;
 }
@@ -97,15 +189,17 @@
   max-height: 160px;
   overflow-y: auto;
   white-space: pre-wrap;
-  background: var(--editor-bg);
+  background: var(--panel-bg);
   border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
   padding: 6px;
   font-size: 11px;
 }
 
 .copilot-block-card {
   border: 1px solid var(--border-color);
-  padding: 6px;
+  border-radius: var(--radius-sm);
+  padding: 8px;
   display: flex;
   flex-direction: column;
   gap: 4px;
@@ -118,15 +212,20 @@
 .copilot-block-handled-badge {
   font-size: 10px;
   padding: 1px 5px;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
 }
 
 .copilot-block-handled-badge.applied {
-  background: #14532d;
+  background: var(--success-bg);
+  color: var(--success-fg);
+  border-color: var(--success-border);
 }
 
 .copilot-block-handled-badge.rejected {
-  background: #7f1d1d;
+  background: var(--danger-bg);
+  color: var(--danger-fg);
+  border-color: var(--danger-border);
 }
 
 .copilot-block-header {
@@ -145,7 +244,8 @@
   overflow-y: auto;
   white-space: pre-wrap;
   font-size: 11px;
-  background: var(--editor-bg);
+  background: var(--panel-bg);
+  border-radius: var(--radius-sm);
   padding: 4px;
 }
 
@@ -159,9 +259,11 @@
 .copilot-status {
   flex-shrink: 0;
   font-size: 11px;
-  background: #78350f;
-  color: #fef3c7;
-  padding: 6px;
+  background: var(--warning-bg);
+  color: var(--warning-fg);
+  border: 1px solid var(--warning-border);
+  border-radius: var(--radius-sm);
+  padding: 6px 8px;
 }
 
 /* Guidance for "what to do next" — distinct from .copilot-status (which is
@@ -169,15 +271,23 @@
 .copilot-flow-hint {
   font-size: 11px;
   color: var(--accent-color);
+  font-weight: 600;
 }
 
 .copilot-plan-revision {
   display: flex;
   flex-direction: column;
   gap: 4px;
-  background: #78350f;
-  padding: 6px;
-  color: #fef3c7;
+  background: var(--warning-bg);
+  border: 1px solid var(--warning-border);
+  border-radius: var(--radius-sm);
+  padding: 8px;
+  color: var(--warning-fg);
+}
+
+.copilot-plan-revision .copilot-flow-hint {
+  color: var(--warning-fg);
+  text-decoration: underline;
 }
 
 .copilot-plan-revision-note {

@@ -3,13 +3,15 @@ import { usePlanStore } from '../state/planStore';
 import { useWorkspaceStore } from '../state/workspaceStore';
 import { usePlanPromptTemplateStore } from '../state/planPromptTemplateStore';
 import { buildPlanPrompt } from '../copilot/planPromptTemplates';
+import { buildToolResultPrompt } from '../copilot/promptTemplates';
 import { buildRepoMap } from '../copilot/repoMap';
 import { resolveWorkspaceFiles } from '../copilot/resolveWorkspaceFile';
 import { readFileText } from '../fs/fsaWorkspace';
 import { parsePlanResponse, fallbackSingleStep } from '../copilot/planParser';
-import { detectNeedFilesRequest } from '../copilot/responseControl';
+import { detectNeedFilesRequest, detectGrepRequest, detectListFilesRequest } from '../copilot/responseControl';
+import { runGrepSearch, runListFiles } from '../copilot/localTools';
 import { FileContextPicker } from './FileContextPicker';
-import { PlanStepCard } from './PlanStepCard';
+import { PlanStepCard, STATUS_LABEL } from './PlanStepCard';
 import './CopilotPanel.css';
 import './PlanPanel.css';
 
@@ -92,6 +94,35 @@ export function PlanPanel() {
       });
       return;
     }
+
+    if (rootHandle) {
+      const grepPattern = detectGrepRequest(planResponseText);
+      if (grepPattern) {
+        setJustCopiedPlan(false);
+        setPlanResponseText('');
+        setStatus(`「${grepPattern}」を検索中...`);
+        void runGrepSearch(rootHandle, grepPattern).then(async (result) => {
+          await navigator.clipboard.writeText(buildToolResultPrompt('検索(grep)', grepPattern, result));
+          setJustCopiedPlan(true);
+          setStatus('検索結果を踏まえたプロンプトをコピーしました。');
+        });
+        return;
+      }
+
+      const listQuery = detectListFilesRequest(planResponseText);
+      if (listQuery !== null) {
+        setJustCopiedPlan(false);
+        setPlanResponseText('');
+        setStatus('ファイル一覧を取得中...');
+        void runListFiles(rootHandle, listQuery).then(async (result) => {
+          await navigator.clipboard.writeText(buildToolResultPrompt('ファイル一覧', listQuery, result));
+          setJustCopiedPlan(true);
+          setStatus('ファイル一覧を踏まえたプロンプトをコピーしました。');
+        });
+        return;
+      }
+    }
+
     const parsed = parsePlanResponse(planResponseText);
     if (parsed) {
       setSteps(parsed);
@@ -133,6 +164,26 @@ export function PlanPanel() {
         <div className="copilot-status">先にフォルダを開いてください。</div>
       )}
 
+      {steps.length > 0 && (
+        <div className="copilot-progress-bar">
+          <span className="copilot-progress-goal" title={goal}>
+            {goal}
+          </span>
+          <span className="plan-progress-track">
+            {steps.map((s) => (
+              <span
+                key={s.id}
+                className={`plan-progress-seg plan-progress-seg-${s.status}`}
+                title={`${s.description}(${STATUS_LABEL[s.status]})`}
+              />
+            ))}
+          </span>
+          <span className="copilot-progress-count">
+            {doneCount}/{steps.length} 完了
+          </span>
+        </div>
+      )}
+
       <div className="copilot-section">
         <div className="copilot-section-title">① 計画を作成</div>
         <div className="copilot-hint">
@@ -159,6 +210,7 @@ export function PlanPanel() {
         </label>
         <div className="copilot-actions">
           <button
+            className="primary"
             disabled={!rootHandle || !goal.trim() || copying}
             title={!goal.trim() ? '目標を入力してください' : undefined}
             onClick={() => void handleCopyPlanPrompt()}
@@ -183,7 +235,7 @@ export function PlanPanel() {
           onChange={(e) => setPlanResponseText(e.target.value)}
         />
         <div className="copilot-actions">
-          <button disabled={!planResponseText.trim()} onClick={handleParsePlan}>
+          <button className="primary" disabled={!planResponseText.trim()} onClick={handleParsePlan}>
             計画を解析
           </button>
         </div>

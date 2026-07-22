@@ -104,6 +104,15 @@ Native Messagingで起動した`lsp-host`の作業ディレクトリは、通常
 - `lsp-host.exe`を再ビルドした直後に起動しない場合は、タスクマネージャーで既存の`lsp-host.exe`を終了し、拡張機能を更新する。
 - 詳細な接続仕様、Native Messaging、ワークスペースルートの扱いは[`docs/lsp_protocol.md`](docs/lsp_protocol.md)を参照する。
 
+## CI/CD
+
+`.github/workflows/ci.yml`で、push、Pull Request、手動実行時に次のチェックを行う。
+
+- 拡張機能: `oxlint`、TypeScriptの型チェック、Viteプロダクションビルド
+- `lsp-host` / `terminal-host`: Rustfmt、Clippy(`-D warnings`)、Unit Test、releaseビルド
+- UbuntuとWindowsの両方でRustホストを検証
+- 成功した実行では、拡張機能の`dist`と各OSのRust releaseバイナリをActionsのArtifactsへ保存
+
 ## 開発時の注意
 
 - `npm run dev`(Vite dev server)でもCRXJSのHMRが使えるが、`background` service worker の変更は手動リロードが必要になることがある。

@@ -1,7 +1,7 @@
 {
   "name": "com.edgellmagenteditor.lsp_host",
   "description": "Launches the lsp-host companion process for EdgeLLMAgentEditor",
-  "path": "E:\\work\\git\\EdgeLLMAgentEditor.git\\lsp-host\\target\\release\\lsp-host.exe",
+  "path": "",
   "type": "stdio",
   "allowed_origins": ["chrome-extension://fehlbbjdbgjgjnbgjnhcehkdgnlagboo/"]
 }

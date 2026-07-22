@@ -81,11 +81,8 @@ fn find_listening_port() -> Option<u16> {
     std::iter::once(config::DEFAULT_PORT)
         .chain(config::PORT_FALLBACKS)
         .find(|port| {
-            TcpStream::connect_timeout(
-                &([127, 0, 0, 1], *port).into(),
-                Duration::from_millis(200),
-            )
-            .is_ok()
+            TcpStream::connect_timeout(&([127, 0, 0, 1], *port).into(), Duration::from_millis(200))
+                .is_ok()
         })
 }
 

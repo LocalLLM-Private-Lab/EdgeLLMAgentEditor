@@ -1,4 +1,4 @@
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -32,10 +32,10 @@ fn generate_token() -> String {
 /// first run. The token only changes if the user deletes the config file.
 pub fn load_or_create() -> anyhow::Result<HostConfig> {
     let path = config_path();
-    if let Ok(contents) = std::fs::read_to_string(&path) {
-        if let Ok(cfg) = serde_json::from_str::<HostConfig>(&contents) {
-            return Ok(cfg);
-        }
+    if let Ok(contents) = std::fs::read_to_string(&path)
+        && let Ok(cfg) = serde_json::from_str::<HostConfig>(&contents)
+    {
+        return Ok(cfg);
     }
 
     let cfg = HostConfig {

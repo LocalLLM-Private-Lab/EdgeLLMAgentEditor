@@ -218,15 +218,16 @@ fn resolve_program(program: &str) -> anyhow::Result<PathBuf> {
         }
     }
 
-    if cfg!(windows) && program == "clangd" {
-        if let Some(program_files) = std::env::var_os("ProgramFiles") {
-            let path = PathBuf::from(program_files)
-                .join("LLVM")
-                .join("bin")
-                .join("clangd.exe");
-            if path.is_file() {
-                return Ok(path);
-            }
+    if cfg!(windows)
+        && program == "clangd"
+        && let Some(program_files) = std::env::var_os("ProgramFiles")
+    {
+        let path = PathBuf::from(program_files)
+            .join("LLVM")
+            .join("bin")
+            .join("clangd.exe");
+        if path.is_file() {
+            return Ok(path);
         }
     }
 

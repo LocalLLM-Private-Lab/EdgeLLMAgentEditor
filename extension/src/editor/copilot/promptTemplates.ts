@@ -7,9 +7,14 @@ export interface ContextFileContent {
   isNew?: boolean;
 }
 
+// No empty fenced block for isNew files — an empty ``` ``` right after
+// "doesn't exist yet" reads as broken/incomplete to a model and was
+// observed causing Copilot to re-request the same file via NEED_FILES
+// instead of proceeding to create it, looping indefinitely. A plain
+// sentence carries the same information without that ambiguity.
 function formatFileBlock(file: ContextFileContent): string {
   if (file.isNew) {
-    return `\`${file.path}\`(まだ存在しない新規ファイルです。空の状態から新しく作成してください):\n\`\`\`\n\`\`\`\n`;
+    return `\`${file.path}\`: このファイルはワークスペース内にまだ存在しません(新規作成対象)。これ以上このファイルをNEED_FILESで要求せず、空の状態から内容を新規作成してコードブロックで返してください。\n`;
   }
   return `\`${file.path}\`:\n\`\`\`\n${file.content}\n\`\`\`\n`;
 }
@@ -26,7 +31,7 @@ function formatFileBlock(file: ContextFileContent): string {
  * whether zero, one, or several files were attached.
  */
 const FILE_INSTRUCTION =
-  '変更が必要な各ファイルについて、そのファイルパスを直前にバッククォート付きの相対パスで明記した上で(例: `src/foo.ts`)、ファイル全体を単一のコードブロックとして返してください(差分ではなくファイル全体)。複数ファイルを変更する場合は、ファイルごとに「パス明記+コードブロック」を繰り返してください。ファイルの内容自体に、行全体がバッククォート3つ以上だけから成る行(README等のMarkdownファイルに含まれる```のような例示コードブロックの行)がある場合は、その行の各バッククォートの直前にバックスラッシュを1つずつ挿入してエスケープしてください(例: ```bash → \\`\\`\\`bash)。このエスケープはこちらの解析時に自動的に元へ戻すので、ファイル自体の内容は変えないでください。添付されたファイルの内容だけでは正確な変更ができないと判断した場合は、コードブロックを生成せず、代わりに1行だけ `NEED_FILES: path/to/a.ts, path/to/b.ts` の形式で不足しているファイルパスをカンマ区切りで列挙してください。ファイルパスが分からず、まずプロジェクト内を検索・一覧したい場合は、代わりに1行だけ `TOOL_GREP: 検索パターン(正規表現可)` または `TOOL_LIST_FILES: ファイル名の一部(空なら全件)` の形式でリクエストしてください。結果を踏まえた続きのプロンプトを自動で用意します。';
+  '変更が必要な各ファイルについて、そのファイルパスを直前にバッククォート付きの相対パスで明記した上で(例: `src/foo.ts`)、ファイル全体を単一のコードブロックとして返してください(差分ではなくファイル全体)。複数ファイルを変更する場合は、ファイルごとに「パス明記+コードブロック」を繰り返してください。ファイルの内容自体に、行全体がバッククォート3つ以上だけから成る行(README等のMarkdownファイルに含まれる```のような例示コードブロックの行)がある場合は、その行の各バッククォートの直前にバックスラッシュを1つずつ挿入してエスケープしてください(例: ```bash → \\`\\`\\`bash)。このエスケープはこちらの解析時に自動的に元へ戻すので、ファイル自体の内容は変えないでください。添付されたファイルの内容だけでは正確な変更ができないと判断した場合は、コードブロックを生成せず、代わりに1行だけ `NEED_FILES: path/to/a.ts, path/to/b.ts` の形式で不足しているファイルパスをカンマ区切りで列挙してください。ただし、「ワークスペース内にまだ存在しません(新規作成対象)」と明記されているファイルについては、既にその旨の回答が済んでいるので、同じファイルを再度NEED_FILESで要求せず、新規ファイルとして内容を作成してコードブロックで返してください。ファイルパスが分からず、まずプロジェクト内を検索・一覧したい場合は、代わりに1行だけ `TOOL_GREP: 検索パターン(正規表現可)` または `TOOL_LIST_FILES: ファイル名の一部(空なら全件)` の形式でリクエストしてください。結果を踏まえた続きのプロンプトを自動で用意します。';
 
 /**
  * Follow-up prompt after a TOOL_GREP / TOOL_LIST_FILES round-trip — a

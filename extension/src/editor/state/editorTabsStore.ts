@@ -2,8 +2,21 @@ import * as monaco from 'monaco-editor';
 import { create } from 'zustand';
 import { v4 as uuid } from 'uuid';
 import type { FileTreeNode, OpenFile } from '../../shared/types';
-import { getFileLastModified, readFileText, writeFileText } from '../fs/fsaWorkspace';
+import { getFileLastModified, readFileBytes, writeFileBytes } from '../fs/fsaWorkspace';
 import { languageFromFilename } from '../monaco/languageRegistrations';
+import { ensureLanguageTokenization } from '../monaco/textmateTokenization';
+import { decodeBytes, detectEncodingFromBytes, encodeString, type TextEncodingId } from '../fs/textEncodings';
+import { useLspStore } from '../lsp/lspStore';
+import { isLspLanguage } from '../lsp/lspLanguages';
+import { pathSegmentsToUri } from '../lsp/uriTranslation';
+
+function detectEol(content: string): 'LF' | 'CRLF' {
+  return content.includes('\r\n') ? 'CRLF' : 'LF';
+}
+
+function eolSequence(eol: 'LF' | 'CRLF'): monaco.editor.EndOfLineSequence {
+  return eol === 'CRLF' ? monaco.editor.EndOfLineSequence.CRLF : monaco.editor.EndOfLineSequence.LF;
+}
 
 interface EditorTab extends OpenFile {
   model: monaco.editor.ITextModel;
@@ -25,6 +38,11 @@ interface EditorTabsState {
   saveAllFiles: () => Promise<void>;
   closeFilesByPathPrefix: (pathPrefix: string[]) => void;
   renameOpenFile: (oldPathSegments: string[], newName: string) => void;
+  /** 'reopen' re-decodes the on-disk bytes with the given encoding, discarding
+   * any unsaved changes (confirms first if dirty). 'resave' only changes what
+   * encoding the *next* save will use, without touching the current content. */
+  setFileEncoding: (id: string, encoding: TextEncodingId, mode: 'reopen' | 'resave') => Promise<void>;
+  setFileEol: (id: string, eol: 'LF' | 'CRLF') => void;
 }
 
 /** Appends `id` to the nav history, discarding any forward history — the
@@ -58,14 +76,23 @@ export const useEditorTabsStore = create<EditorTabsState>((set, get) => ({
     }
 
     const fileHandle = node.handle as FileSystemFileHandle;
-    const [content, lastModified] = await Promise.all([
-      readFileText(fileHandle),
+    const [bytes, lastModified] = await Promise.all([
+      readFileBytes(fileHandle),
       getFileLastModified(fileHandle),
     ]);
+    const encoding = detectEncodingFromBytes(bytes);
+    const content = decodeBytes(bytes, encoding);
+    const eol = detectEol(content);
     const language = languageFromFilename(node.name);
+    await ensureLanguageTokenization(language);
     const id = uuid();
     const modelUri = monaco.Uri.parse(`inmemory://workspace/${id}`);
     const model = monaco.editor.createModel(content, language, modelUri);
+    // Monaco settles on whichever EOL is more frequent in the buffer by
+    // default — pin it to the detected one explicitly so a file that's
+    // (say) all-CRLF-but-one-stray-LF-line still round-trips consistently,
+    // and so getValue() on save reliably emits the original style.
+    model.setEOL(eolSequence(eol));
 
     const tab: EditorTab = {
       id,
@@ -76,6 +103,8 @@ export const useEditorTabsStore = create<EditorTabsState>((set, get) => ({
       isDirty: false,
       language,
       lastKnownDiskModified: lastModified,
+      encoding,
+      eol,
       model,
     };
 
@@ -87,7 +116,30 @@ export const useEditorTabsStore = create<EditorTabsState>((set, get) => ({
           openFiles: state.openFiles.map((f) => (f.id === id ? { ...f, isDirty: true } : f)),
         });
       }
+      if (isLspLanguage(language)) {
+        const rootUri = useLspStore.getState().rootUri;
+        if (rootUri) {
+          useLspStore.getState().notifyDidChange(pathSegmentsToUri(rootUri, node.pathSegments), language);
+        }
+      }
     });
+
+    // Lazily starts (or reuses) the language-server session for supported
+    // languages, then sends textDocument/didOpen. Fire-and-forget keeps a
+    // missing external server from blocking file opening; the status bar
+    // surfaces the launch error.
+    if (isLspLanguage(language)) {
+      void (async () => {
+        try {
+          await useLspStore.getState().ensureSession(language);
+        } catch {
+          return;
+        }
+        const rootUri = useLspStore.getState().rootUri;
+        if (!rootUri) return;
+        useLspStore.getState().registerDocument(pathSegmentsToUri(rootUri, node.pathSegments), model, language);
+      })();
+    }
 
     set((state) => ({
       openFiles: [...state.openFiles, tab],
@@ -98,6 +150,10 @@ export const useEditorTabsStore = create<EditorTabsState>((set, get) => ({
 
   closeFile: (id: string) => {
     const tab = get().openFiles.find((f) => f.id === id);
+    if (tab && isLspLanguage(tab.language)) {
+      const rootUri = useLspStore.getState().rootUri;
+      if (rootUri) useLspStore.getState().unregisterDocument(pathSegmentsToUri(rootUri, tab.pathSegments));
+    }
     tab?.model.dispose();
     set((state) => {
       const openFiles = state.openFiles.filter((f) => f.id !== id);
@@ -137,7 +193,7 @@ export const useEditorTabsStore = create<EditorTabsState>((set, get) => ({
       if (!overwrite) return;
     }
 
-    await writeFileText(tab.fileHandle, tab.model.getValue());
+    await writeFileBytes(tab.fileHandle, encodeString(tab.model.getValue(), tab.encoding));
     const newModified = await getFileLastModified(tab.fileHandle);
     set((state) => ({
       openFiles: state.openFiles.map((f) =>
@@ -157,7 +213,13 @@ export const useEditorTabsStore = create<EditorTabsState>((set, get) => ({
   // tabs pointing at handles for entries that no longer exist.
   closeFilesByPathPrefix: (pathPrefix: string[]) => {
     const toClose = get().openFiles.filter((f) => isPathPrefixMatch(pathPrefix, f.pathSegments));
-    for (const tab of toClose) tab.model.dispose();
+    const rootUri = useLspStore.getState().rootUri;
+    for (const tab of toClose) {
+      if (isLspLanguage(tab.language) && rootUri) {
+        useLspStore.getState().unregisterDocument(pathSegmentsToUri(rootUri, tab.pathSegments));
+      }
+      tab.model.dispose();
+    }
     set((state) => {
       const openFiles = state.openFiles.filter(
         (f) => !isPathPrefixMatch(pathPrefix, f.pathSegments),
@@ -176,11 +238,102 @@ export const useEditorTabsStore = create<EditorTabsState>((set, get) => ({
     set((state) => ({
       openFiles: state.openFiles.map((f) => {
         if (f.pathSegments.join('/') !== oldPathSegments.join('/')) return f;
+        const oldLanguage = f.language;
         const newPathSegments = [...f.pathSegments.slice(0, -1), newName];
         const language = languageFromFilename(newName);
+        const rootUri = useLspStore.getState().rootUri;
+        if (isLspLanguage(oldLanguage) && rootUri) {
+          useLspStore.getState().unregisterDocument(pathSegmentsToUri(rootUri, f.pathSegments));
+        }
+        void ensureLanguageTokenization(language);
         monaco.editor.setModelLanguage(f.model, language);
+        if (isLspLanguage(language)) {
+          void (async () => {
+            try {
+              await useLspStore.getState().ensureSession(language);
+            } catch {
+              return;
+            }
+            const nextRootUri = useLspStore.getState().rootUri;
+            if (nextRootUri) {
+              useLspStore
+                .getState()
+                .registerDocument(pathSegmentsToUri(nextRootUri, newPathSegments), f.model, language);
+            }
+          })();
+        }
         return { ...f, name: newName, pathSegments: newPathSegments, language };
       }),
     }));
   },
+
+  setFileEncoding: async (id: string, encoding: TextEncodingId, mode: 'reopen' | 'resave') => {
+    const tab = get().openFiles.find((f) => f.id === id);
+    if (!tab) return;
+
+    if (mode === 'resave') {
+      set((state) => ({
+        openFiles: state.openFiles.map((f) => (f.id === id ? { ...f, encoding, isDirty: true } : f)),
+      }));
+      return;
+    }
+
+    if (tab.isDirty) {
+      const discard = window.confirm(
+        `${tab.name} には未保存の変更があります。別のエンコーディングで開き直すと、その変更は破棄されます。続行しますか？`,
+      );
+      if (!discard) return;
+    }
+
+    const bytes = await readFileBytes(tab.fileHandle);
+    const content = decodeBytes(bytes, encoding);
+    const eol = detectEol(content);
+    tab.model.setValue(content);
+    tab.model.setEOL(eolSequence(eol));
+    const lastModified = await getFileLastModified(tab.fileHandle);
+    set((state) => ({
+      openFiles: state.openFiles.map((f) =>
+        f.id === id
+          ? { ...f, encoding, eol, isDirty: false, lastKnownDiskModified: lastModified }
+          : f,
+      ),
+    }));
+  },
+
+  setFileEol: (id: string, eol: 'LF' | 'CRLF') => {
+    const tab = get().openFiles.find((f) => f.id === id);
+    if (!tab || tab.eol === eol) return;
+    tab.model.setEOL(eolSequence(eol));
+    set((state) => ({
+      openFiles: state.openFiles.map((f) => (f.id === id ? { ...f, eol, isDirty: true } : f)),
+    }));
+  },
 }));
+
+// Re-registers currently open documents after a language-server session is
+// restarted against a different root. Each language reports its own ready
+// event on the multiplexed connection, so only that language's documents are
+// sent after its initialize handshake completes.
+let syncedLspRootUri: string | null = null;
+const syncedLspLanguages = new Set<string>();
+useLspStore.subscribe((state) => {
+  if (state.status !== 'ready' || !state.rootUri || !state.readyLanguage || !isLspLanguage(state.readyLanguage)) return;
+  const rootChanged = state.rootUri !== syncedLspRootUri;
+  const hadPreviousRoot = syncedLspRootUri !== null;
+  if (rootChanged) syncedLspLanguages.clear();
+  syncedLspRootUri = state.rootUri;
+  if (syncedLspLanguages.has(state.readyLanguage)) return;
+  syncedLspLanguages.add(state.readyLanguage);
+  // The first session for a language is registered by openFile() after its
+  // ensureSession() promise resolves. Re-registering here on that initial
+  // handshake would send duplicate didOpen notifications. A root change is
+  // different: tracked documents were intentionally cleared, so they must
+  // be restored here after the new server initializes.
+  if (!hadPreviousRoot || !rootChanged) return;
+
+  const rootUri = state.rootUri;
+  for (const tab of useEditorTabsStore.getState().openFiles) {
+    if (tab.language !== state.readyLanguage) continue;
+    useLspStore.getState().registerDocument(pathSegmentsToUri(rootUri, tab.pathSegments), tab.model, tab.language);
+  }
+});

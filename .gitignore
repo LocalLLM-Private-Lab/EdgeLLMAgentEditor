@@ -1,6 +1,8 @@
 # Rust
 terminal-host/target
 terminal-host/**/*.pdb
+lsp-host/target
+lsp-host/**/*.pdb
 
 # OS
 .DS_Store

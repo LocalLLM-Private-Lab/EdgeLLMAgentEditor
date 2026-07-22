@@ -1,7 +1,7 @@
 {
   "name": "com.m365copilot.terminal_host_launcher",
   "description": "Launches the terminal-host companion process for M365 Copilot Code Editor",
-  "path": "E:\\javaScriptProjects\\CodeEditorForM365Copilot\\terminal-host\\target\\release\\terminal-host.exe",
+  "path": "",
   "type": "stdio",
   "allowed_origins": ["chrome-extension://fehlbbjdbgjgjnbgjnhcehkdgnlagboo/"]
 }

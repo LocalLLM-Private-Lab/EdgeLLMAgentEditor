@@ -1,5 +1,6 @@
 import { useEffect, useRef } from 'react';
 import * as monaco from 'monaco-editor';
+import { ensureLanguageTokenization } from '../monaco/textmateTokenization';
 import './DiffViewModal.css';
 
 interface DiffViewModalProps {
@@ -23,20 +24,29 @@ export function DiffViewModal({
 
   useEffect(() => {
     if (!containerRef.current) return;
-    const diffEditor = monaco.editor.createDiffEditor(containerRef.current, {
-      readOnly: true,
-      renderSideBySide: true,
-      automaticLayout: true,
-      theme: 'vs-dark',
+    let disposed = false;
+    let diffEditor: monaco.editor.IStandaloneDiffEditor | undefined;
+    let originalModel: monaco.editor.ITextModel | undefined;
+    let modifiedModel: monaco.editor.ITextModel | undefined;
+
+    void ensureLanguageTokenization(language).then(() => {
+      if (disposed || !containerRef.current) return;
+      diffEditor = monaco.editor.createDiffEditor(containerRef.current, {
+        readOnly: true,
+        renderSideBySide: true,
+        automaticLayout: true,
+        theme: 'dark-plus',
+      });
+      originalModel = monaco.editor.createModel(original, language);
+      modifiedModel = monaco.editor.createModel(modified, language);
+      diffEditor.setModel({ original: originalModel, modified: modifiedModel });
     });
-    const originalModel = monaco.editor.createModel(original, language);
-    const modifiedModel = monaco.editor.createModel(modified, language);
-    diffEditor.setModel({ original: originalModel, modified: modifiedModel });
 
     return () => {
-      diffEditor.dispose();
-      originalModel.dispose();
-      modifiedModel.dispose();
+      disposed = true;
+      diffEditor?.dispose();
+      originalModel?.dispose();
+      modifiedModel?.dispose();
     };
   }, [original, modified, language]);
 

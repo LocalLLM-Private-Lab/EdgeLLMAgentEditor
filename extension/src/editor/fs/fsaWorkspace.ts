@@ -19,6 +19,11 @@ export async function readFileText(handle: FileSystemFileHandle): Promise<string
   return file.text();
 }
 
+export async function readFileBytes(handle: FileSystemFileHandle): Promise<Uint8Array<ArrayBuffer>> {
+  const file = await handle.getFile();
+  return new Uint8Array(await file.arrayBuffer());
+}
+
 export async function getFileLastModified(handle: FileSystemFileHandle): Promise<number> {
   const file = await handle.getFile();
   return file.lastModified;
@@ -31,6 +36,18 @@ export async function writeFileText(
   const writable = await handle.createWritable();
   try {
     await writable.write(contents);
+  } finally {
+    await writable.close();
+  }
+}
+
+export async function writeFileBytes(
+  handle: FileSystemFileHandle,
+  bytes: Uint8Array<ArrayBuffer>,
+): Promise<void> {
+  const writable = await handle.createWritable();
+  try {
+    await writable.write(bytes);
   } finally {
     await writable.close();
   }

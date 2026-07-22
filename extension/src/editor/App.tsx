@@ -2,6 +2,8 @@ import { useEffect, useState } from 'react';
 import { useWorkspaceStore } from './state/workspaceStore';
 import { useEditorTabsStore } from './state/editorTabsStore';
 import { useTerminalStore } from './state/terminalStore';
+import { useKeybindingStore } from './state/keybindingStore';
+import { useLspStore } from './lsp/lspStore';
 import { useRunCommandStore, extensionOf, buildRunCommand } from './state/runCommandStore';
 import { resolveRelativeFilePath } from './terminal/resolveRelativeFilePath';
 import { getStoredValue, setStoredValue } from '../shared/chromeStorage';
@@ -51,6 +53,12 @@ export default function App() {
   const terminalSettings = useTerminalStore((s) => s.settings);
   const connectTerminal = useTerminalStore((s) => s.connect);
 
+  const keybindingMode = useKeybindingStore((s) => s.mode);
+  const setKeybindingMode = useKeybindingStore((s) => s.setMode);
+  const loadKeybindingMode = useKeybindingStore((s) => s.loadMode);
+
+  const loadLspWorkspaceRootOverride = useLspStore((s) => s.loadWorkspaceRootOverride);
+
   const runCommands = useRunCommandStore((s) => s.commands);
   const loadRunCommands = useRunCommandStore((s) => s.loadCommands);
   const queueRunRequest = useTerminalStore((s) => s.queueRunRequest);
@@ -88,12 +96,16 @@ export default function App() {
     void loadRunCommands();
     void loadPromptTemplates();
     void loadPlanPromptTemplates();
+    void loadKeybindingMode();
+    void loadLspWorkspaceRootOverride();
   }, [
     restoreFromLastSession,
     loadTerminalSettings,
     loadRunCommands,
     loadPromptTemplates,
     loadPlanPromptTemplates,
+    loadKeybindingMode,
+    loadLspWorkspaceRootOverride,
   ]);
 
   // Connects to terminal-host as soon as its settings are known, even
@@ -280,6 +292,26 @@ export default function App() {
         {
           label: '折り返しの切り替え (Alt+Z)',
           onClick: handleToggleWordWrap,
+        },
+      ],
+    },
+    {
+      label: '操作',
+      items: [
+        {
+          label: 'キーバインド: デフォルト',
+          onClick: () => void setKeybindingMode('default'),
+          checked: keybindingMode === 'default',
+        },
+        {
+          label: 'キーバインド: Vim',
+          onClick: () => void setKeybindingMode('vim'),
+          checked: keybindingMode === 'vim',
+        },
+        {
+          label: 'キーバインド: Emacs',
+          onClick: () => void setKeybindingMode('emacs'),
+          checked: keybindingMode === 'emacs',
         },
       ],
     },

@@ -23,7 +23,7 @@
 - **Copilotタブへのスクリプト注入は一切不可能(検証済み)**: `chrome.scripting.executeScript`・`content_scripts`のどちらを使っても、Edgeは`copilot.microsoft.com`と`m365.cloud.microsoft`を保護対象ドメインとして扱い、あらゆる注入をブロックする(`"The extensions gallery cannot be scripted."`)。詳細は`docs/dom-selectors.md`。これはToS配慮による設計選択ではなく、ブラウザレベルの技術的制約。
   - この発見により、**プロンプト挿入も回答キャプチャも自動化できない**。実装はクリップボードコピー+手動貼り付けのみで構成されている(`extension/src/editor/components/CopilotPanel.tsx`)。
 - **FSAハンドルは実パスを持たない**: 過去バージョンではRust側のネイティブフォルダ選択ダイアログでこれを埋め合わせていたが、バックグラウンドで無言に開いたダイアログがブラウザの裏に隠れて「ターミナルが反応しない」実害を招いたため撤去した。現在は `terminal-host` の起動ディレクトリ(`std::env::current_dir()`)をそのままセッションのcwdの既定値として使う(`terminal-host/src/pty_session.rs` の `default_cwd()`)。エディタ側のフォルダと自動で一致させる手段は無いため、必要なら開いたターミナルの中で `cd` する(プロジェクトフォルダの中で `terminal-host` を起動する運用にすればそれも不要になるが必須ではない)。詳細は `docs/protocol.md` の「cwd(作業フォルダ)の扱い」を参照。実行コマンド機能(拡張子ごとのコマンド)も同じ理由から絶対パスではなく相対パス(`{file}` → ワークスペースルートからの相対パス、ターミナルのcwdがワークスペースルートである前提)を使う。
-- **拡張機能からのterminal-host起動はNative Messaging経由**: 拡張機能はブラウザのサンドボックス内にあり、OSプロセスを直接起動する手段が無い。唯一の手段がChrome/EdgeのNative Messaging APIで、`terminal-host/install-native-messaging-host.bat`による一度限りのレジストリ登録(`terminal-host.exe`への固定パス、プロジェクトフォルダへのコピーなし)の後、ターミナルパネルの「ターミナルホストを起動」ボタンから起動できる。詳細は`docs/protocol.md`の「Native Messagingによる自動起動」を参照。
+- **拡張機能からのterminal-host起動はNative Messaging経由**: 拡張機能はブラウザのサンドボックス内にあり、OSプロセスを直接起動する手段が無い。唯一の手段がChrome/EdgeのNative Messaging APIで、`terminal-host/install-native-messaging-host.bat`による一度限りのレジストリ登録(`terminal-host.exe`への固定パス、プロジェクトフォルダへのコピーなし)の後、ターミナルパネルの「ターミナルホストを起動」ボタンから起動できる。通常はHKCUへ登録するが、Edgeの`NativeMessagingUserLevelHosts=0`ポリシー環境ではインストーラがUACで管理者権限を取得してHKLMへ登録する。詳細は`docs/protocol.md`の「Native Messagingによる自動起動」を参照。
 
 ## Phase 3 — Copilot連携(クリップボード方式で実装済み)
 

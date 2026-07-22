@@ -46,7 +46,7 @@ File System Access API(拡張機能がエディタでフォルダを開くのに
 
 拡張機能はブラウザのサンドボックス内で動くため、`fetch` や DOM API では OS プロセス(`terminal-host.exe`)を起動できない。唯一の手段が Chrome/Edge の **Native Messaging API**(`chrome.runtime.sendNativeMessage`)で、拡張機能から登録済みのネイティブ実行ファイルを起動できる。
 
-- 登録は `terminal-host/install-native-messaging-host.bat` が一度だけ行う(`HKCU\Software\Microsoft\Edge\NativeMessagingHosts\com.m365copilot.terminal_host_launcher` に、`terminal-host.exe` への固定パスを書いたマニフェストJSONを登録)。プロジェクトフォルダへのコピーは発生しない。プロジェクトとは無関係の一回限りの設定。
+- 登録は `terminal-host/install-native-messaging-host.bat` が一度だけ行う。通常は `HKCU\Software\Microsoft\Edge\NativeMessagingHosts\com.m365copilot.terminal_host_launcher` に登録するが、Edgeポリシー `NativeMessagingUserLevelHosts=0` を検出した場合はUACで管理者権限を取得し、`HKLM`へ登録する。マニフェストJSONは実行ファイルへの固定パスを持ち、プロジェクトフォルダへのコピーは発生しない。プロジェクトとは無関係の一回限りの設定。
 - 拡張機能は `terminal-host/src/native_messaging.rs` に実装された `terminal-host.exe` 自身に `{"cmd":"start"}` を送る。ブラウザは Native Messaging ホストを起動する際、呼び出し元拡張機能のoriginを `argv[1]`(例: `chrome-extension://<id>/`)として渡すため、`main.rs` はこれを見て「Native Messaging経由の起動」を「通常起動」と区別する。
 - Native Messaging モードでは: (1) 既にWSサーバがどれかのポートで listen 中なら `already_running` を返して終了、(2) そうでなければ自分自身(`terminal-host.exe`)を `DETACHED_PROCESS` フラグ付きで再起動し、`started` を返して終了する。この再起動されたプロセスは通常起動と全く同じ(cwdは自分の実行ファイルのあるディレクトリ、WSサーバを起動して常駐)であり、Native Messaging の接続(ブラウザ側の寿命管理)には紐付かない。
 

@@ -1,16 +1,16 @@
 @echo off
 setlocal enabledelayedexpansion
 
-rem One-time setup: registers terminal-host.exe as an Edge Native Messaging
-rem host, so the extension can ask the browser to launch it (no other way
-rem for an extension to start a local process exists). Run this once after
-rem building; re-run only if you move/rebuild terminal-host.exe to a new path.
+rem One-time setup: registers lsp-host.exe as an Edge Native Messaging host,
+rem so the extension can ask the browser to launch it (no other way for an
+rem extension to start a local process exists). Run this once after
+rem building; re-run only if you move/rebuild lsp-host.exe to a new path.
 rem Normally this uses HKCU and does not need admin rights. If the Edge policy
 rem NativeMessagingUserLevelHosts is set to 0, Edge only accepts a machine-
 rem level HKLM registration, so this script relaunches itself with UAC
 rem elevation before registering the host.
 
-set "HOST_NAME=com.m365copilot.terminal_host_launcher"
+set "HOST_NAME=com.edgellmagenteditor.lsp_host"
 set "EXT_ID=fehlbbjdbgjgjnbgjnhcehkdgnlagboo"
 set "SCRIPT_DIR=%~dp0"
 set "REG_ROOT=HKCU"
@@ -30,12 +30,12 @@ if not errorlevel 1 (
     echo [install-native-messaging-host] Detected NativeMessagingUserLevelHosts=0; using HKLM.
 )
 
-if exist "%SCRIPT_DIR%target\release\terminal-host.exe" (
-    set "EXE_PATH=%SCRIPT_DIR%target\release\terminal-host.exe"
-) else if exist "%SCRIPT_DIR%target\debug\terminal-host.exe" (
-    set "EXE_PATH=%SCRIPT_DIR%target\debug\terminal-host.exe"
+if exist "%SCRIPT_DIR%target\release\lsp-host.exe" (
+    set "EXE_PATH=%SCRIPT_DIR%target\release\lsp-host.exe"
+) else if exist "%SCRIPT_DIR%target\debug\lsp-host.exe" (
+    set "EXE_PATH=%SCRIPT_DIR%target\debug\lsp-host.exe"
 ) else (
-    echo [install-native-messaging-host] terminal-host.exe not found. Run "cargo build --release" first.
+    echo [install-native-messaging-host] lsp-host.exe not found. Run "cargo build --release" first.
     exit /b 1
 )
 
@@ -44,7 +44,7 @@ set "MANIFEST_PATH=%SCRIPT_DIR%native-messaging-host-manifest.json"
 > "%MANIFEST_PATH%" (
     echo {
     echo   "name": "%HOST_NAME%",
-    echo   "description": "Launches the terminal-host companion process for M365 Copilot Code Editor",
+    echo   "description": "Launches the lsp-host companion process for EdgeLLMAgentEditor",
     echo   "path": "%EXE_PATH:\=\\%",
     echo   "type": "stdio",
     echo   "allowed_origins": ["chrome-extension://%EXT_ID%/"]
@@ -60,5 +60,5 @@ if errorlevel 1 (
 echo [install-native-messaging-host] Registered %HOST_NAME% in %REG_ROOT%
 echo   exe:      %EXE_PATH%
 echo   manifest: %MANIFEST_PATH%
-echo Done. Reload the extension (edge://extensions) and use the terminal
-echo panel's launch button to start terminal-host from the browser.
+echo Done. Reload the extension (edge://extensions) and open a .rs file to
+echo have the editor launch lsp-host automatically.

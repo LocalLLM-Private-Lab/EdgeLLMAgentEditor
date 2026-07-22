@@ -34,8 +34,10 @@ pub fn build_router(state: AppState) -> Router {
         .with_state(state)
 }
 
+pub const HEALTH_RESPONSE: &str = "EdgeLLMAgentEditor-lsp-host";
+
 async fn health() -> &'static str {
-    "ok"
+    HEALTH_RESPONSE
 }
 
 async fn ws_handler(
@@ -99,7 +101,10 @@ const STDIO_ARGS: &[&str] = &["--stdio"];
 const SOLARGRAPH_ARGS: &[&str] = &["stdio"];
 const PYRIGHT_PACKAGES: &[&str] = &["pyright"];
 const WEB_PACKAGES: &[&str] = &["vscode-langservers-extracted"];
-const TYPESCRIPT_PACKAGES: &[&str] = &["typescript", "typescript-language-server"];
+// typescript-language-server currently requires the classic tsserver.js
+// entrypoint, which is not included in the TypeScript 7.x package layout.
+// Keep the auto-installed compiler on the latest compatible 5.x release.
+const TYPESCRIPT_PACKAGES: &[&str] = &["typescript@5.9.3", "typescript-language-server"];
 
 // Package-manager operations are serialized because npm and RubyGems both
 // update shared user-level metadata. Separate language sessions can still
@@ -115,7 +120,8 @@ fn install_lock() -> &'static Mutex<()> {
 /// files rather than native executables; `resolve_program` handles them via
 /// cmd.exe after locating them on PATH.
 fn external_server_candidates(language: &str) -> Vec<ExternalServerCandidate> {
-    match language {
+    let language = language.trim().to_ascii_lowercase();
+    match language.as_str() {
         "c" | "cpp" => vec![ExternalServerCandidate {
             program: "clangd",
             args: EMPTY_ARGS,
@@ -187,12 +193,27 @@ fn resolve_program(program: &str) -> anyhow::Result<PathBuf> {
     let output = Command::new(lookup).arg(program).output()?;
     if output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
-        let path = stdout
+        let mut paths: Vec<PathBuf> = stdout
             .lines()
             .map(str::trim)
-            .find(|line| !line.is_empty())
-            .map(PathBuf::from);
-        if let Some(path) = path {
+            .filter(|line| !line.is_empty())
+            .map(PathBuf::from)
+            .collect();
+
+        if cfg!(windows) {
+            // `where.exe npm` can return an extensionless npm script before
+            // npm.cmd/npm.bat. Windows cannot execute that script directly;
+            // prefer native executables and command wrappers explicitly.
+            paths.sort_by_key(|path| match path.extension().and_then(|ext| ext.to_str()) {
+                Some(ext) if ext.eq_ignore_ascii_case("exe") => 0,
+                Some(ext) if ext.eq_ignore_ascii_case("cmd") => 1,
+                Some(ext) if ext.eq_ignore_ascii_case("bat") => 2,
+                None => 3,
+                Some(_) => 4,
+            });
+        }
+
+        if let Some(path) = paths.into_iter().next() {
             return Ok(path);
         }
     }
@@ -212,7 +233,7 @@ fn resolve_program(program: &str) -> anyhow::Result<PathBuf> {
     anyhow::bail!("executable not found on PATH: {program}")
 }
 
-fn npm_root() -> PathBuf {
+fn npm_base_root() -> PathBuf {
     dirs::data_local_dir()
         .unwrap_or_else(std::env::temp_dir)
         .join("EdgeLLMAgentEditor")
@@ -221,23 +242,43 @@ fn npm_root() -> PathBuf {
         .join("npm")
 }
 
+/// Keep npm dependency trees separate because Windows can lock a running
+/// language server's package directory while npm is reifying another package
+/// in the same prefix. This lets Python/Pyright and TypeScript start together.
+fn npm_root(executable: &str) -> PathBuf {
+    let scope = match executable {
+        "pyright-langserver" => "python",
+        "vscode-html-language-server" | "vscode-css-language-server" => "web",
+        "typescript-language-server" => "typescript",
+        _ => executable,
+    };
+    npm_base_root().join(scope)
+}
+
 fn npm_bin_path(executable: &str) -> PathBuf {
     let suffix = if cfg!(windows) { ".cmd" } else { "" };
-    npm_root()
+    npm_root(executable)
         .join("node_modules")
         .join(".bin")
         .join(format!("{executable}{suffix}"))
 }
 
-fn quote_command_arg(arg: &str) -> String {
-    if !arg.is_empty()
-        && arg
-            .chars()
-            .all(|ch| !ch.is_whitespace() && !matches!(ch, '"' | '&' | '|' | '<' | '>' | '^'))
-    {
-        return arg.to_string();
-    }
-    format!("\"{}\"", arg.replace('"', "\\\""))
+fn user_typescript_tsserver_path() -> PathBuf {
+    npm_root("typescript-language-server")
+        .join("node_modules")
+        .join("typescript")
+        .join("lib")
+        .join("tsserver.js")
+}
+
+fn has_typescript_tsserver(root_dir: &Path) -> bool {
+    root_dir
+        .join("node_modules")
+        .join("typescript")
+        .join("lib")
+        .join("tsserver.js")
+        .is_file()
+        || user_typescript_tsserver_path().is_file()
 }
 
 fn run_program(
@@ -251,13 +292,13 @@ fn run_program(
 
     let mut command;
     if is_cmd {
-        let mut command_line = quote_command_arg(&resolved.to_string_lossy());
-        for arg in args {
-            command_line.push(' ');
-            command_line.push_str(&quote_command_arg(arg));
-        }
         command = Command::new("cmd.exe");
-        command.args(["/d", "/s", "/c", &command_line]);
+        // Pass the wrapper path as its own argument. With `/s /c` and a
+        // pre-quoted command string, Windows can preserve the escaping and
+        // try to execute `\"C:\\Program Files\\...` as the command name.
+        command.args(["/d", "/c", "call"]);
+        command.arg(resolved);
+        command.args(args);
     } else {
         command = Command::new(resolved);
         command.args(args);
@@ -310,6 +351,11 @@ fn installed_program(spec: AutoInstall) -> anyhow::Result<PathBuf> {
         AutoInstall::Npm { executable, .. } => {
             let local = npm_bin_path(executable);
             if local.is_file() {
+                if executable == "typescript-language-server"
+                    && !user_typescript_tsserver_path().is_file()
+                {
+                    anyhow::bail!("ユーザー領域のTypeScriptにtsserver.jsがありません")
+                }
                 return Ok(local);
             }
             resolve_program(executable)
@@ -326,13 +372,14 @@ fn installed_program(spec: AutoInstall) -> anyhow::Result<PathBuf> {
     }
 }
 
-fn install_npm(packages: &'static [&'static str]) -> anyhow::Result<()> {
+fn install_npm(packages: &'static [&'static str], executable: &'static str) -> anyhow::Result<()> {
     let npm = resolve_program("npm")?;
-    std::fs::create_dir_all(npm_root())?;
+    let root = npm_root(executable);
+    std::fs::create_dir_all(&root)?;
     let mut args = vec![
         "install".to_string(),
         "--prefix".to_string(),
-        npm_root().to_string_lossy().into_owned(),
+        root.to_string_lossy().into_owned(),
         "--no-package-lock".to_string(),
         "--no-save".to_string(),
     ];
@@ -405,7 +452,10 @@ fn install_clangd() -> anyhow::Result<()> {
 
 fn install_auto(spec: AutoInstall) -> anyhow::Result<()> {
     match spec {
-        AutoInstall::Npm { packages, .. } => install_npm(packages),
+        AutoInstall::Npm {
+            packages,
+            executable,
+        } => install_npm(packages, executable),
         AutoInstall::Gem { package, .. } => install_gem(package),
         AutoInstall::Clangd => install_clangd(),
     }
@@ -426,19 +476,11 @@ fn spawn_resolved_server(
         return LanguageServerSession::spawn(resolved, args, root_dir, language, out_tx);
     }
 
-    let mut command_line = format!("\"{}\"", resolved.display());
-    if !args.is_empty() {
-        command_line.push(' ');
-        command_line.push_str(&args.join(" "));
-    }
-    let shell_args = ["/d", "/s", "/c", command_line.as_str()];
-    LanguageServerSession::spawn(
-        Path::new("cmd.exe"),
-        &shell_args,
-        root_dir,
-        language,
-        out_tx,
-    )
+    let mut command = std::process::Command::new("cmd.exe");
+    command.args(["/d", "/c", "call"]);
+    command.arg(resolved);
+    command.args(args);
+    LanguageServerSession::spawn_command(command, root_dir, language, out_tx)
 }
 
 fn spawn_external_server(
@@ -476,6 +518,13 @@ async fn ensure_language_server_session(
     }
     let mut errors = Vec::new();
     for candidate in candidates.iter().copied() {
+        // A typescript-language-server process can start successfully and
+        // only fail during `initialize` when TypeScript 7.x is installed.
+        // Prefer the auto-install path until a compatible tsserver.js exists.
+        if candidate.program == "typescript-language-server" && !has_typescript_tsserver(&root_dir)
+        {
+            continue;
+        }
         match spawn_external_server(
             candidate.program,
             candidate.args,
@@ -577,6 +626,7 @@ async fn handle_socket(socket: WebSocket) {
                 language,
                 workspace_root,
             } => {
+                let language = language.trim().to_ascii_lowercase();
                 if language != "rust" && external_server_candidates(&language).is_empty() {
                     let _ = out_tx.send(ServerMessage::Error {
                         message: format!("unsupported language: {language}"),
@@ -678,4 +728,27 @@ async fn handle_socket(socket: WebSocket) {
         let _ = active.server.kill();
     }
     writer_task.abort();
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{external_server_candidates, npm_root};
+
+    #[test]
+    fn typescript_language_is_supported() {
+        assert!(!external_server_candidates("typescript").is_empty());
+        assert!(!external_server_candidates(" TypeScript ").is_empty());
+    }
+
+    #[test]
+    fn npm_server_scopes_are_isolated() {
+        assert_ne!(
+            npm_root("pyright-langserver"),
+            npm_root("typescript-language-server")
+        );
+        assert_eq!(
+            npm_root("vscode-html-language-server"),
+            npm_root("vscode-css-language-server")
+        );
+    }
 }

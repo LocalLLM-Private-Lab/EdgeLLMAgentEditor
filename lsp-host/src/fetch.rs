@@ -47,13 +47,10 @@ pub fn find_cached_exe() -> Option<PathBuf> {
         .map(|entry| entry.path())
         .collect();
     versions.sort();
-    versions
-        .into_iter()
-        .rev()
-        .find_map(|dir| {
-            let exe = dir.join("rust-analyzer.exe");
-            exe.is_file().then_some(exe)
-        })
+    versions.into_iter().rev().find_map(|dir| {
+        let exe = dir.join("rust-analyzer.exe");
+        exe.is_file().then_some(exe)
+    })
 }
 
 /// Returns the path to a working rust-analyzer.exe, downloading and
@@ -82,7 +79,10 @@ pub async fn ensure_rust_analyzer(
         .iter()
         .find(|a| a.name == WINDOWS_ASSET_NAME)
         .ok_or_else(|| {
-            anyhow::anyhow!("no '{WINDOWS_ASSET_NAME}' asset in rust-analyzer release {}", release.tag_name)
+            anyhow::anyhow!(
+                "no '{WINDOWS_ASSET_NAME}' asset in rust-analyzer release {}",
+                release.tag_name
+            )
         })?;
 
     let resp = client
@@ -137,13 +137,17 @@ pub async fn ensure_rust_analyzer(
             }
             let mut out_file = std::fs::File::create(&out_path)?;
             std::io::copy(&mut entry, &mut out_file)?;
-            if name.extension().is_some_and(|ext| ext.eq_ignore_ascii_case("exe")) {
+            if name
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("exe"))
+            {
                 extracted_exe = Some(out_path);
             }
         }
 
-        let extracted_exe = extracted_exe
-            .ok_or_else(|| anyhow::anyhow!("no .exe entry found in the downloaded rust-analyzer archive"))?;
+        let extracted_exe = extracted_exe.ok_or_else(|| {
+            anyhow::anyhow!("no .exe entry found in the downloaded rust-analyzer archive")
+        })?;
         if extracted_exe != exe_path_for_extract {
             std::fs::rename(&extracted_exe, &exe_path_for_extract)?;
         }
@@ -152,7 +156,10 @@ pub async fn ensure_rust_analyzer(
     .await??;
 
     if !exe_path.is_file() {
-        anyhow::bail!("extraction completed but {} was not produced", exe_path.display());
+        anyhow::bail!(
+            "extraction completed but {} was not produced",
+            exe_path.display()
+        );
     }
 
     Ok(exe_path)

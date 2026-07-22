@@ -9,7 +9,9 @@
 // status is meant to transition on its own in the status bar.
 const NATIVE_HOST_NAME = 'com.edgellmagenteditor.lsp_host';
 
-const RESPONSE_TIMEOUT_MS = 5000;
+// The host may need to bind an OS-assigned loopback port and wait until the
+// detached server has published/started listening on it.
+const RESPONSE_TIMEOUT_MS = 15000;
 
 export type LspNativeLaunchResult =
   | { status: 'started'; port: number; token: string }

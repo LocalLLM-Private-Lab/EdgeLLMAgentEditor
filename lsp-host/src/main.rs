@@ -51,8 +51,20 @@ async fn main() -> anyhow::Result<()> {
                 break 'bind (listener, *candidate);
             }
         }
-        anyhow::bail!("could not bind to any of {ports_to_try:?} on 127.0.0.1");
+
+        // All preferred ports are occupied. Port 0 asks the OS to select an
+        // unused loopback port, which keeps Native Messaging usable even on
+        // machines where another application owns the fixed port range.
+        let listener = tokio::net::TcpListener::bind(SocketAddr::from(([127, 0, 0, 1], 0))).await?;
+        let port = listener.local_addr()?.port();
+        tracing::warn!(
+            port,
+            "fixed LSP ports are occupied; using a dynamic loopback port"
+        );
+        break 'bind (listener, port);
     };
+
+    config::write_active_port(port)?;
 
     let state = ws_server::AppState {
         config: cfg.clone(),
@@ -72,6 +84,8 @@ async fn main() -> anyhow::Result<()> {
     println!("  (this process's own launch directory — run lsp-host.exe from inside");
     println!("   your Rust project's root folder, same convention as terminal-host)");
 
-    axum::serve(listener, app).await?;
+    let serve_result = axum::serve(listener, app).await;
+    config::clear_active_port(port);
+    serve_result?;
     Ok(())
 }

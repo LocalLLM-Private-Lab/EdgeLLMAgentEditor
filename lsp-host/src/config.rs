@@ -1,4 +1,4 @@
-use base64::{engine::general_purpose::URL_SAFE_NO_PAD, Engine as _};
+use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use rand::RngCore;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -23,13 +23,42 @@ fn config_path() -> PathBuf {
     config_dir().join("config.json")
 }
 
+fn active_port_path() -> PathBuf {
+    config_dir().join("active-port")
+}
+
+/// Stores the actual bound loopback port so the short-lived Native Messaging
+/// process can discover a server that had to fall back to an OS-assigned port.
+pub fn write_active_port(port: u16) -> anyhow::Result<()> {
+    std::fs::create_dir_all(config_dir())?;
+    std::fs::write(active_port_path(), port.to_string())?;
+    Ok(())
+}
+
+pub fn read_active_port() -> Option<u16> {
+    std::fs::read_to_string(active_port_path())
+        .ok()?
+        .trim()
+        .parse()
+        .ok()
+}
+
+/// Removes the active-port marker only if it still belongs to this server.
+/// This avoids an older process clearing the marker after a newer process has
+/// already bound a replacement port.
+pub fn clear_active_port(port: u16) {
+    if read_active_port() == Some(port) {
+        let _ = std::fs::remove_file(active_port_path());
+    }
+}
+
 fn generate_token() -> String {
     let mut bytes = [0u8; 32];
     rand::thread_rng().fill_bytes(&mut bytes);
     URL_SAFE_NO_PAD.encode(bytes)
 }
 
-/// Loads the persisted token/port, or creates and persists a new one on
+/// Loads the persisted token/preferred port, or creates and persists a new one on
 /// first run. The token only changes if the user deletes the config file.
 /// Both the long-running WS server (main.rs) and the short-lived native
 /// messaging launcher (native_messaging.rs) call this and get the same

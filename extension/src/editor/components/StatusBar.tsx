@@ -10,7 +10,7 @@ import { pickLspWorkspaceFolder } from '../lsp/lspNativeLaunch';
 import './MenuBar.css';
 import './StatusBar.css';
 
-function LspBadge() {
+function LspBadge({ activeLanguage }: { activeLanguage: string | null }) {
   const [open, setOpen] = useState(false);
   const status = useLspStore((s) => s.status);
   const fetchProgress = useLspStore((s) => s.fetchProgress);
@@ -58,7 +58,7 @@ function LspBadge() {
     status === 'ready' ? 'codicon-check' : status === 'error' ? 'codicon-warning' : 'codicon-sync';
   const label =
     status === 'ready'
-      ? `LSP${readyLanguage ? ` (${readyLanguage})` : ''}`
+      ? `LSP${(activeLanguage ?? readyLanguage) ? ` (${activeLanguage ?? readyLanguage})` : ''}`
       : status === 'error'
         ? 'LSP エラー'
         : status === 'fetching'
@@ -220,7 +220,7 @@ export function StatusBar() {
         </span>
       </div>
       <div className="status-bar-right">
-        <LspBadge />
+        <LspBadge activeLanguage={activeTab?.language ?? null} />
         {activeTab && <EncodingBadge tabId={activeTab.id} encoding={activeTab.encoding} />}
         {activeTab && <EolBadge tabId={activeTab.id} eol={activeTab.eol} />}
       </div>

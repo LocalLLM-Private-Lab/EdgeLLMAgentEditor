@@ -7,7 +7,7 @@
 
 ## 接続
 
-- URL: `ws://127.0.0.1:<port>/ws`(既定ポート `51881`、使用中なら `51882`〜`51884` にフォールバック。`terminal-host` の `51877`〜`51880` とは別範囲)
+- URL: `ws://127.0.0.1:<port>/ws`（既定ポート `51881`、使用中なら `51882`〜`51884` にフォールバック。固定ポートがすべて使用中なら、OSに割り当てさせたloopback動的ポートへ切り替える。`terminal-host` の `51877`〜`51880` とは別範囲）
 - 認証は `terminal-host` と全く同じ:
   - `Origin` ヘッダが起動時に固定した拡張機能ID(`chrome-extension://<id>`)と一致すること
   - トークンは `Sec-WebSocket-Protocol` サブプロトコルとして送る(`new WebSocket(url, [token])`)
@@ -18,8 +18,8 @@
 
 `terminal-host` と同じ Native Messaging 起動の仕組みを使うが、1点改良している: レスポンスに `port`/`token` を含める。
 
-- 登録は `lsp-host/install-native-messaging-host.bat` が一度だけ行う(`HKCU\Software\Microsoft\Edge\NativeMessagingHosts\com.edgellmagenteditor.lsp_host`)。
-- 拡張機能は `{"cmd":"start"}` を送る。`lsp-host/src/native_messaging.rs::handle_start()` は `config::load_or_create()` で永続化済みのport/tokenを読み(常駐WSサーバも同じファイルを読む)、`{"status":"started"|"already_running","port":..,"token":..}` を返す。
+- 登録は `lsp-host/install-native-messaging-host.bat` が一度だけ行う。通常は `HKCU\Software\Microsoft\Edge\NativeMessagingHosts\com.edgellmagenteditor.lsp_host` を使うが、Edgeポリシー `NativeMessagingUserLevelHosts=0`（環境によっては単数形 `NativeMessagingUserLevelHost=0`）を検出した場合はUACで管理者権限を取得し、`HKLM`へ登録する。
+- 拡張機能は `{"cmd":"start"}` を送る。`lsp-host/src/native_messaging.rs::handle_start()` は固定ポートと動的ポートの稼働状態を確認し、未起動なら常駐WSサーバを起動して実際にlistenしたポートを待ってから、`{"status":"started"|"already_running","port":..,"token":..}` を返す。別プロセスが固定ポートを占有している場合も、`/health` 応答でlsp-host自身かを確認して誤接続を避ける。
 - Native Messaging のレスポンスは呼び出し元の拡張機能にしかブラウザ経由で届かないため、この応答にトークンを含めても外部に漏れない。これにより`terminal-host`のような「表示されたport/tokenを設定画面に手動貼り付け」という手順が不要になり、ブラウザ側は`OpenSession`をそのまま自動送信できる。
 
 同じNative Messagingホストはもう1つのコマンドにも対応する: `{"cmd":"pick_folder"}` を送ると、`handle_pick_folder()` がネイティブのWindowsフォルダ選択ダイアログ(`rfd`クレート)を表示し、`{"status":"picked","path":"C:\\..."}` または(キャンセル時)`{"status":"cancelled"}` を返す。ワークスペースルート訂正機能(下記)のための絶対パス取得手段で、ステータスバーの「フォルダを選択...」ボタンからのみ、ユーザーの明示的なクリックに応じて呼び出される — `terminal-host`で撤去された無言の`pick_workspace_folder`(バックグラウンドで勝手にダイアログを出し、ブラウザの裏に隠れてハングのように見えた)とは異なり、常にユーザー操作の直接の結果として起動するため同じ問題は起きない。

@@ -33,8 +33,12 @@ fn read_lsp_message<R: BufRead>(reader: &mut R) -> io::Result<Option<Value>> {
             content_length = value.trim().parse().ok();
         }
     }
-    let len = content_length
-        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "LSP frame missing Content-Length"))?;
+    let len = content_length.ok_or_else(|| {
+        io::Error::new(
+            io::ErrorKind::InvalidData,
+            "LSP frame missing Content-Length",
+        )
+    })?;
     let mut body = vec![0u8; len];
     reader.read_exact(&mut body)?;
     let value = serde_json::from_slice(&body)
@@ -62,8 +66,21 @@ impl LanguageServerSession {
         language: &str,
         out_tx: UnboundedSender<ServerMessage>,
     ) -> anyhow::Result<Self> {
-        let mut child = Command::new(program)
-            .args(args)
+        let mut command = Command::new(program);
+        command.args(args);
+        Self::spawn_command(command, root_dir, language, out_tx)
+    }
+
+    /// Spawns a preconfigured command while keeping the same LSP stdio
+    /// handling as `spawn`. This is used for Windows `.cmd`/`.bat` wrappers,
+    /// which must be launched through `cmd.exe`.
+    pub fn spawn_command(
+        mut command: Command,
+        root_dir: &std::path::Path,
+        language: &str,
+        out_tx: UnboundedSender<ServerMessage>,
+    ) -> anyhow::Result<Self> {
+        let mut child = command
             .current_dir(root_dir)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -99,7 +116,10 @@ impl LanguageServerSession {
                     Err(_) => break,
                 }
             }
-            let _ = out_tx.send(ServerMessage::ProcessExited { language, code: None });
+            let _ = out_tx.send(ServerMessage::ProcessExited {
+                language,
+                code: None,
+            });
         });
 
         Ok(Self {

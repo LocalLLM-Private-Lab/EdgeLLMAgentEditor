@@ -6,9 +6,10 @@
 //! https://developer.chrome.com/docs/apps/nativeMessaging
 //!
 //! Mirrors terminal-host/src/native_messaging.rs, with one deliberate
-//! difference: the response also carries `port`/`token` (read via
-//! `config::load_or_create()`, the same file the long-running WS server
-//! reads/writes). Native Messaging responses are only ever delivered back to
+//! difference: the response also carries the actual `port` and `token` (the
+//! token comes from `config::load_or_create()`, while a dynamic port is
+//! published through the active-port marker by the long-running WS server).
+//! Native Messaging responses are only ever delivered back to
 //! the calling extension (browser-mediated), so this doesn't leak the
 //! token anywhere untrusted — it just lets the extension auto-connect
 //! without a manual copy-paste settings step, since LSP status is meant to
@@ -19,6 +20,9 @@ use std::net::TcpStream;
 use std::time::Duration;
 
 use crate::config;
+use crate::ws_server::HEALTH_RESPONSE;
+
+const STARTUP_TIMEOUT: Duration = Duration::from_secs(8);
 
 fn log(line: &str) {
     let path = std::env::temp_dir().join("lsp-host-native-messaging.log");
@@ -72,7 +76,7 @@ fn handle_start() -> serde_json::Value {
         }
     };
 
-    if let Some(port) = find_listening_port() {
+    if let Some(port) = find_lsp_port(&cfg) {
         log(&format!("already listening on port {port}"));
         return serde_json::json!({
             "status": "already_running",
@@ -84,7 +88,16 @@ fn handle_start() -> serde_json::Value {
     match spawn_detached() {
         Ok(()) => {
             log("spawn_detached() succeeded");
-            serde_json::json!({ "status": "started", "port": cfg.port, "token": cfg.token })
+            match wait_for_lsp_port(&cfg) {
+                Some(port) => {
+                    log(&format!("lsp-host is listening on port {port}"));
+                    serde_json::json!({ "status": "started", "port": port, "token": cfg.token })
+                }
+                None => serde_json::json!({
+                    "status": "error",
+                    "message": "lsp-hostは起動しましたが、loopbackポートのlistenを確認できませんでした"
+                }),
+            }
         }
         Err(err) => {
             log(&format!("spawn_detached() failed: {err}"));
@@ -109,16 +122,59 @@ fn handle_pick_folder() -> serde_json::Value {
     }
 }
 
-fn find_listening_port() -> Option<u16> {
-    std::iter::once(config::DEFAULT_PORT)
+fn candidate_ports(cfg: &config::HostConfig) -> impl Iterator<Item = u16> {
+    std::iter::once(cfg.port)
         .chain(config::PORT_FALLBACKS)
-        .find(|port| {
-            TcpStream::connect_timeout(
-                &([127, 0, 0, 1], *port).into(),
-                Duration::from_millis(200),
-            )
-            .is_ok()
-        })
+        .chain(config::read_active_port())
+}
+
+fn is_lsp_host_port(port: u16) -> bool {
+    let Ok(mut stream) =
+        TcpStream::connect_timeout(&([127, 0, 0, 1], port).into(), Duration::from_millis(200))
+    else {
+        return false;
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(300)));
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(300)));
+    if std::io::Write::write_all(
+        &mut stream,
+        b"GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+    )
+    .is_err()
+    {
+        return false;
+    }
+
+    let mut response = Vec::new();
+    if stream.read_to_end(&mut response).is_err() {
+        return false;
+    }
+    let response = String::from_utf8_lossy(&response);
+    response.starts_with("HTTP/1.1 200") && response.contains(HEALTH_RESPONSE)
+}
+
+fn find_lsp_port(cfg: &config::HostConfig) -> Option<u16> {
+    let mut seen = Vec::new();
+    candidate_ports(cfg).find(|port| {
+        if seen.contains(port) {
+            return false;
+        }
+        seen.push(*port);
+        is_lsp_host_port(*port)
+    })
+}
+
+fn wait_for_lsp_port(cfg: &config::HostConfig) -> Option<u16> {
+    let deadline = std::time::Instant::now() + STARTUP_TIMEOUT;
+    loop {
+        if let Some(port) = find_lsp_port(cfg) {
+            return Some(port);
+        }
+        if std::time::Instant::now() >= deadline {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
 
 #[cfg(windows)]

@@ -26,14 +26,29 @@ export function pathSegmentsToUri(rootUri: string, pathSegments: string[]): stri
  * cased `uri` — not lowercased — since FSA's getFileHandle/getDirectoryHandle
  * do exact case-sensitive string matching against real on-disk names. */
 export function uriToPathSegments(rootUri: string, uri: string): string[] | null {
-  const prefix = `${rootUri.replace(/\/+$/, '')}/`;
-  if (uri.length < prefix.length || uri.slice(0, prefix.length).toLowerCase() !== prefix.toLowerCase()) {
+  // Some language servers (notably Pyright on Windows) percent-encode the
+  // drive-letter colon (`file:///e%3A/...`), while lsp-host's root URI is
+  // commonly returned as `file:///E:/...`. Compare decoded file URIs so both
+  // forms resolve to the same workspace-relative path.
+  const decodeUri = (value: string): string => {
+    try {
+      return decodeURIComponent(value);
+    } catch {
+      return value;
+    }
+  };
+  const decodedRootUri = decodeUri(rootUri).replace(/\\/g, '/');
+  const decodedUri = decodeUri(uri).replace(/\\/g, '/');
+  const prefix = `${decodedRootUri.replace(/\/+$/, '')}/`;
+  if (
+    decodedUri.length < prefix.length ||
+    decodedUri.slice(0, prefix.length).toLowerCase() !== prefix.toLowerCase()
+  ) {
     return null;
   }
-  return uri
+  return decodedUri
     .slice(prefix.length)
-    .split('/')
-    .map((segment) => decodeURIComponent(segment));
+    .split('/');
 }
 
 /** Lowercased form of a `file://` URI, used only as an internal Map key for

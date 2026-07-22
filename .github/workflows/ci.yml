@@ -63,6 +63,12 @@ jobs:
         with:
           components: rustfmt, clippy
 
+      - name: Install Linux GUI build dependencies
+        if: runner.os == 'Linux' && matrix.project == 'lsp-host'
+        run: |
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y pkg-config libwayland-dev
+
       - name: Check formatting
         run: cargo fmt --all -- --check
 

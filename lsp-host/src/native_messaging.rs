@@ -199,6 +199,22 @@ fn spawn_detached() -> anyhow::Result<()> {
     Ok(())
 }
 
+#[cfg(not(windows))]
+fn spawn_detached() -> anyhow::Result<()> {
+    let exe = std::env::current_exe()?;
+    let launch_dir = exe
+        .parent()
+        .ok_or_else(|| anyhow::anyhow!("lsp-host has no parent directory"))?;
+
+    std::process::Command::new(&exe)
+        .current_dir(launch_dir)
+        .stdin(std::process::Stdio::null())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
+        .spawn()?;
+    Ok(())
+}
+
 fn read_message() -> anyhow::Result<Option<serde_json::Value>> {
     let mut len_buf = [0u8; 4];
     if let Err(err) = io::stdin().read_exact(&mut len_buf) {

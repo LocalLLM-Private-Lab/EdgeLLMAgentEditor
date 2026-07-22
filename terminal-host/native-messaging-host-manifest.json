@@ -1,7 +1,0 @@
-{
-  "name": "com.m365copilot.terminal_host_launcher",
-  "description": "Launches the terminal-host companion process for M365 Copilot Code Editor",
-  "path": "",
-  "type": "stdio",
-  "allowed_origins": ["chrome-extension://fehlbbjdbgjgjnbgjnhcehkdgnlagboo/"]
-}

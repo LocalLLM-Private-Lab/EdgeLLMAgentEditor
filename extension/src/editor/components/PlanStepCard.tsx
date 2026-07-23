@@ -213,7 +213,7 @@ export function PlanStepCard({
 
   /** Copies a prompt asking Copilot to return a full replacement plan given
    * the reason it reported via REVISE_PLAN — the result is pasted into the
-   * existing "②計画を取り込む" box in PlanPanel, same as the initial plan. */
+   * existing "②Copilotの回答を貼り付け" box in PlanPanel, same as the initial plan. */
   async function handleCopyRevisionPrompt() {
     if (!planRevisionNote) return;
     setCopyingRevision(true);
@@ -286,7 +286,7 @@ export function PlanStepCard({
   }
 
   return (
-    <div className={`plan-step-card ${isActive ? 'active' : ''}`}>
+    <div id={`plan-step-${step.id}`} className={`plan-step-card ${isActive ? 'active' : ''}`}>
       <div className="plan-step-header" onClick={onFocus}>
         <span className="plan-step-collapse-icon">{collapsed ? '▶' : '▼'}</span>
         <span className={`plan-step-status plan-step-status-${step.status}`}>
@@ -347,7 +347,7 @@ export function PlanStepCard({
               </div>
               {justCopiedRevision && (
                 <div className="copilot-flow-hint">
-                  ↓ Copilotのチャットに貼り付けて送信し、返ってきたJSONを上の「②計画を取り込む」に貼り付けてください
+                  ↓ Copilotのチャットに貼り付けて送信し、返ってきたJSONを上の「②Copilotの回答を貼り付け」に貼り付けてください
                 </div>
               )}
             </div>

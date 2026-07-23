@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { usePlanStore } from '../state/planStore';
 import { useWorkspaceStore } from '../state/workspaceStore';
 import { usePlanPromptTemplateStore } from '../state/planPromptTemplateStore';
@@ -41,9 +41,67 @@ export function PlanPanel() {
   const [planResponseText, setPlanResponseText] = useState('');
   const [status, setStatus] = useState<string | null>(null);
 
+  // Element id (matches the id= on each section/card below) of whichever
+  // part of the plan is "current" — drives the outline's highlight and,
+  // in focus mode, which single section is actually rendered.
+  const [currentLocation, setCurrentLocation] = useState('plan-section-goal');
+  const [focusMode, setFocusMode] = useState(false);
+  const bodyRef = useRef<HTMLDivElement | null>(null);
+
   useEffect(() => {
     void loadPlan();
   }, [loadPlan]);
+
+  // Scroll-spy: keeps the outline's highlight in sync with whatever's
+  // actually scrolled into view, not just the last thing explicitly
+  // clicked. Only meaningful outside focus mode, since focus mode hides
+  // everything except currentLocation itself (nothing left to scroll past).
+  //
+  // Position-based rather than IntersectionObserver: an expanded step
+  // card can be much taller than a collapsed one, so "last entry in the
+  // callback" doesn't reliably mean "bottommost on screen" — entries
+  // arrive in the order their intersection *state changed*, not DOM
+  // order. Scanning targets in DOM order and keeping whichever one's top
+  // has most recently passed a fixed reference line just below the
+  // sticky header gives a deterministic "topmost thing currently in view".
+  useEffect(() => {
+    const body = bodyRef.current;
+    if (!body || focusMode) return;
+    const targets = Array.from(
+      body.querySelectorAll<HTMLElement>('[id^="plan-section-"], [id^="plan-step-"]'),
+    );
+    if (targets.length === 0) return;
+
+    let ticking = false;
+    function updateCurrent() {
+      ticking = false;
+      if (!body) return;
+      // Scrolled to (or past) the very bottom: the last target should win
+      // even if it's short and its own top never reaches the reference
+      // line — there's no more content below it to push it up to that
+      // line, since it's already flush against the bottom of the view.
+      const atBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 2;
+      if (atBottom) {
+        setCurrentLocation(targets[targets.length - 1].id);
+        return;
+      }
+      const referenceY = body.getBoundingClientRect().top + 40;
+      let current = targets[0];
+      for (const t of targets) {
+        if (t.getBoundingClientRect().top <= referenceY) current = t;
+      }
+      setCurrentLocation(current.id);
+    }
+    function onScroll() {
+      if (ticking) return;
+      ticking = true;
+      requestAnimationFrame(updateCurrent);
+    }
+
+    updateCurrent();
+    body.addEventListener('scroll', onScroll, { passive: true });
+    return () => body.removeEventListener('scroll', onScroll);
+  }, [focusMode, steps.length]);
 
   // Takes an explicit file list rather than reading contextFiles from state
   // — handleParsePlan needs to copy a prompt built from a just-merged list
@@ -143,6 +201,42 @@ export function PlanPanel() {
     setActiveStepId(activeStepId === stepId ? null : stepId);
   }
 
+  function scrollToId(id: string) {
+    document.getElementById(id)?.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }
+
+  // Outline click: sets the highlight immediately (don't wait for
+  // scroll-spy to catch up — in focus mode there's no scrolling at all,
+  // so this is the only thing that updates it) and scrolls to it when not
+  // in focus mode, where there's a full list to scroll through.
+  function goToLocation(id: string) {
+    setCurrentLocation(id);
+    if (!focusMode) requestAnimationFrame(() => scrollToId(id));
+  }
+
+  // Left-rail outline navigation for a step: expands it (so what you land
+  // on is actually usable, not just a collapsed header) and scrolls once
+  // that expansion has been painted, rather than scrolling to where the
+  // collapsed card used to be.
+  function jumpToStep(stepId: string) {
+    setActiveStepId(stepId);
+    goToLocation(`plan-step-${stepId}`);
+  }
+
+  // Turning focus mode on on its own can't just hide everything but
+  // currentLocation if that happens to be a step nobody expanded yet
+  // (e.g. scroll-spy left it there without a click) — line activeStepId
+  // up with it first so the one card left standing isn't a collapsed header.
+  function toggleFocusMode() {
+    setFocusMode((v) => {
+      const next = !v;
+      if (next && currentLocation.startsWith('plan-step-')) {
+        setActiveStepId(currentLocation.slice('plan-step-'.length));
+      }
+      return next;
+    });
+  }
+
   // Completing the focused step moves focus to the next not-yet-done one,
   // so attention naturally follows the remaining work instead of staying
   // on a step that's already finished.
@@ -157,9 +251,46 @@ export function PlanPanel() {
   if (!loaded) return null;
 
   const doneCount = steps.filter((s) => s.status === 'done').length;
+  const showGoalSection = !focusMode || currentLocation === 'plan-section-goal';
+  const showImportSection = !focusMode || currentLocation === 'plan-section-import';
+  const visibleSteps = focusMode ? steps.filter((s) => `plan-step-${s.id}` === currentLocation) : steps;
 
   return (
     <div className="plan-panel">
+      <div className="plan-outline">
+        <button
+          className={`plan-outline-toggle ${focusMode ? 'active' : ''}`}
+          onClick={toggleFocusMode}
+          title={focusMode ? '全体を表示' : '今いる場所だけを表示'}
+        >
+          {focusMode ? '☰' : '◱'}
+        </button>
+        <button
+          className={`plan-outline-item ${currentLocation === 'plan-section-goal' ? 'active' : ''}`}
+          onClick={() => goToLocation('plan-section-goal')}
+          title="① 計画を作成"
+        >
+          1
+        </button>
+        <button
+          className={`plan-outline-item ${currentLocation === 'plan-section-import' ? 'active' : ''}`}
+          onClick={() => goToLocation('plan-section-import')}
+          title="② Copilotの回答を貼り付け"
+        >
+          2
+        </button>
+        {steps.map((step, i) => (
+          <button
+            key={step.id}
+            className={`plan-outline-item step ${step.status} ${currentLocation === `plan-step-${step.id}` ? 'active' : ''}`}
+            onClick={() => jumpToStep(step.id)}
+            title={step.description}
+          >
+            3-{i + 1}
+          </button>
+        ))}
+      </div>
+      <div className="plan-panel-body" ref={bodyRef}>
       {!rootHandle && (
         <div className="copilot-status">先にフォルダを開いてください。</div>
       )}
@@ -184,7 +315,8 @@ export function PlanPanel() {
         </div>
       )}
 
-      <div className="copilot-section">
+      {showGoalSection && (
+      <div className="copilot-section" id="plan-section-goal">
         <div className="copilot-section-title">① 計画を作成</div>
         <div className="copilot-hint">
           複数ファイルにまたがる目標を入力してください。関連するファイルをコンテキストに追加すると、より的確な計画になります。
@@ -225,9 +357,14 @@ export function PlanPanel() {
           </div>
         )}
       </div>
+      )}
 
-      <div className="copilot-section">
-        <div className="copilot-section-title">② 計画を取り込む</div>
+      {showImportSection && (
+      <div className="copilot-section" id="plan-section-import">
+        <div className="copilot-section-title">② Copilotの回答を貼り付け</div>
+        <div className="copilot-hint">
+          計画のJSONだけでなく、Copilotが追加ファイルや検索を求めてきた場合の回答も、種類を問わずすべてここに貼り付けてください。内容を見て自動で判別します。
+        </div>
         <textarea
           className="copilot-instruction-input"
           placeholder="Copilotの回答をここに貼り付け(前後に説明文があっても構いません)"
@@ -236,14 +373,15 @@ export function PlanPanel() {
         />
         <div className="copilot-actions">
           <button className="primary" disabled={!planResponseText.trim()} onClick={handleParsePlan}>
-            計画を解析
+            回答を解析
           </button>
         </div>
       </div>
+      )}
 
       {status && <div className="copilot-status">{status}</div>}
 
-      {steps.length > 0 && (
+      {visibleSteps.length > 0 && (
         <div className="copilot-section">
           <div className="copilot-section-title">
             ③ ステップを実行 ({doneCount}/{steps.length} 完了)
@@ -251,22 +389,30 @@ export function PlanPanel() {
           <div className="copilot-hint">
             注目しているステップだけが展開されます。ヘッダーをクリックすると切り替えられます。
           </div>
-          {steps.map((step, index) => (
-            <PlanStepCard
-              key={step.id}
-              step={step}
-              index={index}
-              allSteps={steps}
-              goal={goal}
-              rootHandle={rootHandle}
-              isActive={step.id === activeStepId}
-              onFocus={() => handleToggleStep(step.id)}
-              onStatusChange={(s) => handleStepStatusChange(step.id, s)}
-              onFilesChange={(files) => setStepFiles(step.id, files)}
-            />
-          ))}
+          {steps.map((step, index) => {
+            // Index/allSteps stay based on the *full* list (not the
+            // possibly-filtered visibleSteps) since buildStepPrompt needs
+            // the step's real position in the whole plan regardless of
+            // what focus mode is currently hiding.
+            if (focusMode && `plan-step-${step.id}` !== currentLocation) return null;
+            return (
+              <PlanStepCard
+                key={step.id}
+                step={step}
+                index={index}
+                allSteps={steps}
+                goal={goal}
+                rootHandle={rootHandle}
+                isActive={step.id === activeStepId}
+                onFocus={() => handleToggleStep(step.id)}
+                onStatusChange={(s) => handleStepStatusChange(step.id, s)}
+                onFilesChange={(files) => setStepFiles(step.id, files)}
+              />
+            );
+          })}
         </div>
       )}
+      </div>
     </div>
   );
 }

@@ -8,6 +8,7 @@
 export type ClientMessage =
   | { type: 'open_session'; language: string; workspace_root?: string }
   | { type: 'lsp'; language: string; payload: unknown }
+  | { type: 'restart_session'; language: string }
   | { type: 'close_session' };
 
 export type ServerMessage =
@@ -17,4 +18,5 @@ export type ServerMessage =
   | { type: 'fetch_error'; message: string }
   | { type: 'lsp'; language: string; payload: unknown }
   | { type: 'process_exited'; language: string; code: number | null }
+  | { type: 'rust_analyzer_build_scripts_crashed'; language: string }
   | { type: 'error'; message: string };

@@ -717,6 +717,47 @@ async fn handle_socket(socket: WebSocket) {
                     });
                 }
             }
+            ClientMessage::RestartSession { language } => {
+                let language = language.trim().to_ascii_lowercase();
+                let Some(mut active) = sessions.lock().await.remove(&language) else {
+                    let _ = out_tx.send(ServerMessage::Error {
+                        message: format!("LSP session is not ready for language: {language}"),
+                    });
+                    continue;
+                };
+                let _ = active.server.kill();
+                let session_slot = sessions.clone();
+                let out_tx2 = out_tx.clone();
+                tokio::spawn(async move {
+                    match ensure_language_server_session(
+                        out_tx2.clone(),
+                        active.root_dir.clone(),
+                        &language,
+                    )
+                    .await
+                    {
+                        Ok(server) => {
+                            let root_uri_str = root_uri(&active.root_dir);
+                            session_slot.lock().await.insert(
+                                language.clone(),
+                                ActiveSession {
+                                    server,
+                                    root_dir: active.root_dir,
+                                },
+                            );
+                            let _ = out_tx2.send(ServerMessage::Ready {
+                                language,
+                                root_uri: root_uri_str,
+                            });
+                        }
+                        Err(err) => {
+                            let _ = out_tx2.send(ServerMessage::FetchError {
+                                message: err.to_string(),
+                            });
+                        }
+                    }
+                });
+            }
             ClientMessage::CloseSession => {
                 for (_, mut active) in sessions.lock().await.drain() {
                     let _ = active.server.kill();

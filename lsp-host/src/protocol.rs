@@ -28,6 +28,9 @@ pub enum ClientMessage {
         language: String,
         payload: serde_json::Value,
     },
+    RestartSession {
+        language: String,
+    },
     CloseSession,
 }
 
@@ -61,6 +64,9 @@ pub enum ServerMessage {
     ProcessExited {
         language: String,
         code: Option<i32>,
+    },
+    RustAnalyzerBuildScriptsCrashed {
+        language: String,
     },
     Error {
         message: String,

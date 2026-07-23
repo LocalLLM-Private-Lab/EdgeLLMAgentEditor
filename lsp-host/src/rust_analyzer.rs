@@ -8,6 +8,7 @@
 use serde_json::Value;
 use std::io::{self, BufRead, BufReader, Write};
 use std::process::{Child, ChildStdin, Command, Stdio};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc::UnboundedSender;
 
@@ -16,6 +17,7 @@ use crate::protocol::ServerMessage;
 pub struct LanguageServerSession {
     stdin: Arc<Mutex<ChildStdin>>,
     child: Child,
+    suppress_exit_notification: Arc<AtomicBool>,
 }
 
 fn read_lsp_message<R: BufRead>(reader: &mut R) -> io::Result<Option<Value>> {
@@ -53,6 +55,13 @@ fn write_lsp_message<W: Write>(writer: &mut W, value: &Value) -> io::Result<()> 
     writer.flush()
 }
 
+fn is_build_script_crash_line(line: &str) -> (bool, bool) {
+    let line = line.to_ascii_lowercase();
+    let build_scripts = line.contains("run_build_scripts") || line.contains("build scripts");
+    let panic = line.contains("senderror") || line.contains("panicked") || line.contains("panic");
+    (build_scripts, panic)
+}
+
 impl LanguageServerSession {
     /// Spawns `program` with `root_dir` as its cwd and starts a reader
     /// thread that forwards every LSP frame from stdout as
@@ -80,11 +89,16 @@ impl LanguageServerSession {
         language: &str,
         out_tx: UnboundedSender<ServerMessage>,
     ) -> anyhow::Result<Self> {
+        let monitor_build_scripts = language.eq_ignore_ascii_case("rust");
         let mut child = command
             .current_dir(root_dir)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
-            .stderr(Stdio::null())
+            .stderr(if monitor_build_scripts {
+                Stdio::piped()
+            } else {
+                Stdio::null()
+            })
             .spawn()?;
 
         let stdin = child
@@ -95,8 +109,30 @@ impl LanguageServerSession {
             .stdout
             .take()
             .ok_or_else(|| anyhow::anyhow!("child has no stdout handle"))?;
+        let stderr = child.stderr.take();
 
         let language = language.to_string();
+        if let Some(stderr) = stderr {
+            let stderr_language = language.clone();
+            let stderr_tx = out_tx.clone();
+            std::thread::spawn(move || {
+                let mut saw_build_scripts = false;
+                let mut saw_panic = false;
+                for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                    let (build_scripts, panic) = is_build_script_crash_line(&line);
+                    saw_build_scripts |= build_scripts;
+                    saw_panic |= panic;
+                    if saw_build_scripts && saw_panic {
+                        let _ = stderr_tx.send(ServerMessage::RustAnalyzerBuildScriptsCrashed {
+                            language: stderr_language,
+                        });
+                        break;
+                    }
+                }
+            });
+        }
+        let suppress_exit_notification = Arc::new(AtomicBool::new(false));
+        let reader_suppress_exit_notification = suppress_exit_notification.clone();
         std::thread::spawn(move || {
             let mut reader = BufReader::new(stdout);
             loop {
@@ -116,15 +152,18 @@ impl LanguageServerSession {
                     Err(_) => break,
                 }
             }
-            let _ = out_tx.send(ServerMessage::ProcessExited {
-                language,
-                code: None,
-            });
+            if !reader_suppress_exit_notification.load(Ordering::Acquire) {
+                let _ = out_tx.send(ServerMessage::ProcessExited {
+                    language,
+                    code: None,
+                });
+            }
         });
 
         Ok(Self {
             stdin: Arc::new(Mutex::new(stdin)),
             child,
+            suppress_exit_notification,
         })
     }
 
@@ -138,7 +177,34 @@ impl LanguageServerSession {
     }
 
     pub fn kill(&mut self) -> anyhow::Result<()> {
+        self.suppress_exit_notification
+            .store(true, Ordering::Release);
         self.child.kill()?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::is_build_script_crash_line;
+
+    #[test]
+    fn detects_build_script_panic_terms() {
+        assert_eq!(
+            is_build_script_crash_line("thread panicked in run_build_scripts"),
+            (true, true)
+        );
+        assert_eq!(
+            is_build_script_crash_line("called Result::unwrap() on SendError"),
+            (false, true)
+        );
+    }
+
+    #[test]
+    fn ignores_unrelated_rust_analyzer_output() {
+        assert_eq!(
+            is_build_script_crash_line("failed to resolve a dependency"),
+            (false, false)
+        );
     }
 }

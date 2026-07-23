@@ -75,7 +75,12 @@ const sessionDeferreds = new Map<string, { resolve: () => void; reject: (err: Er
 const initializedLanguages = new Set<string>();
 const activeLanguages = new Set<string>();
 let nextRequestId = 1;
-const pendingRequests = new Map<number, { resolve: (value: unknown) => void; reject: (err: Error) => void }>();
+const pendingRequests = new Map<
+  number,
+  { language: string; resolve: (value: unknown) => void; reject: (err: Error) => void }
+>();
+let rustBuildScriptsDisabled = false;
+const rustFallbackRestarting = new Set<string>();
 
 interface TrackedDocument {
   uri: string;
@@ -109,7 +114,7 @@ function sendRequest(language: string, method: string, params: unknown): Promise
       return;
     }
     const id = nextRequestId++;
-    pendingRequests.set(id, { resolve, reject });
+    pendingRequests.set(id, { language, resolve, reject });
     client.send({ type: 'lsp', language, payload: { jsonrpc: '2.0', id, method, params } });
   });
 }
@@ -144,6 +149,19 @@ async function performInitialize(
       processId: null,
       rootUri,
       workspaceFolders: [{ uri: rootUri, name: 'workspace' }],
+      ...(language === 'rust' && rustBuildScriptsDisabled
+        ? {
+            // Avoid rust-analyzer's build-script worker for environments
+            // affected by the run_build_scripts crash.
+            initializationOptions: {
+              cargo: {
+                buildScripts: {
+                  enable: false,
+                },
+              },
+            },
+          }
+        : {}),
       capabilities: {
         textDocument: {
           synchronization: { didSave: true },
@@ -176,6 +194,7 @@ async function performInitialize(
     })) as { serverInfo?: { version?: string } } | undefined;
     sendNotification(language, 'initialized', {});
     initializedLanguages.add(language);
+    rustFallbackRestarting.delete(language);
     set({
       status: 'ready',
       readyLanguage: language,
@@ -188,6 +207,7 @@ async function performInitialize(
     sessionDeferreds.delete(language);
   } catch (err) {
     const error = err instanceof Error ? err : new Error(String(err));
+    if (rustFallbackRestarting.has(language)) return;
     initializedLanguages.delete(language);
     set({ status: 'error', errorMessage: error.message });
     sessionDeferreds.get(language)?.reject(error);
@@ -199,6 +219,14 @@ function rejectAllSessions(error: Error): void {
   for (const deferred of sessionDeferreds.values()) deferred.reject(error);
   sessionDeferreds.clear();
   initializedLanguages.clear();
+}
+
+function rejectPendingRequests(language: string, error: Error): void {
+  for (const [id, pending] of pendingRequests) {
+    if (pending.language !== language) continue;
+    pendingRequests.delete(id);
+    pending.reject(error);
+  }
 }
 
 function handleServerMessage(msg: ServerMessage, set: (partial: Partial<LspState>) => void): void {
@@ -225,12 +253,28 @@ function handleServerMessage(msg: ServerMessage, set: (partial: Partial<LspState
       break;
     }
     case 'process_exited':
+      if (rustFallbackRestarting.has(msg.language)) break;
       initializedLanguages.delete(msg.language);
       sessionPromises.delete(msg.language);
       sessionDeferreds.get(msg.language)?.reject(new Error(`${msg.language} の言語サーバーが終了しました`));
       sessionDeferreds.delete(msg.language);
       set({ status: 'error', errorMessage: `${msg.language} の言語サーバーが終了しました` });
       break;
+    case 'rust_analyzer_build_scripts_crashed': {
+      if (msg.language !== 'rust' || rustBuildScriptsDisabled) {
+        const error = new Error('rust-analyzerのbuild script解析が再起動後も失敗しました');
+        set({ status: 'error', errorMessage: error.message });
+        rejectAllSessions(error);
+        break;
+      }
+      rustBuildScriptsDisabled = true;
+      rustFallbackRestarting.add(msg.language);
+      initializedLanguages.delete(msg.language);
+      rejectPendingRequests(msg.language, new Error('rust-analyzerをbuild script無効で再起動しています'));
+      set({ status: 'starting', errorMessage: 'rust-analyzerのbuild scriptクラッシュを検知。無効化して再起動中です' });
+      client?.send({ type: 'restart_session', language: msg.language });
+      break;
+    }
     case 'error': {
       const error = new Error(msg.message);
       set({ status: 'error', errorMessage: msg.message });

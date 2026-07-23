@@ -32,6 +32,7 @@
 |---|---|---|
 | `open_session` | `language, workspace_root?` | 指定言語のLSPセッションを開始。対応言語はRust/C/C++/Python/Ruby/HTML/CSS/JavaScript/TypeScript。`workspace_root` は絶対パス文字列(省略可) |
 | `lsp` | `language, payload` | 指定言語の生のLSP JSON-RPCオブジェクト(`initialize`/`textDocument/didOpen`等)。ホストは中身を一切解釈せず、その言語サーバーのstdinへ転送する |
+| `restart_session` | `language` | Rustのbuild scriptクラッシュ検知後、同じワークスペースで言語サーバーを再起動する |
 | `close_session` | (なし) | 現在のセッションの言語サーバープロセスを終了 |
 
 ## メッセージ(ホスト → 拡張機能、`ServerMessage`)
@@ -44,6 +45,7 @@
 | `fetch_error` | `message` | 自動フェッチ失敗 |
 | `lsp` | `language, payload` | 指定言語の言語サーバーstdoutから届いた生のLSP JSON-RPCオブジェクト |
 | `process_exited` | `language, code` | 指定言語の言語サーバープロセスの読み取りループがEOFに達した(v1では `code` は常に `null`) |
+| `rust_analyzer_build_scripts_crashed` | `language` | rust-analyzerのstderrでbuild scriptワーカーのpanicを検知。拡張機能はbuild script無効でセッションを再起動する |
 | `error` | `message` | 上記以外のエラー(未対応言語の指定など) |
 
 ## 現在利用できるLSP機能

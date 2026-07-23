@@ -139,12 +139,44 @@ function applyDiagnostics(language: string, params: PublishDiagnosticsParams): v
   monaco.editor.setModelMarkers(doc.model, `lsp-${language}`, markers);
 }
 
+function fileUriToPath(uri: string): string | null {
+  try {
+    const parsed = new URL(uri);
+    if (parsed.protocol !== 'file:') return null;
+    let path = decodeURIComponent(parsed.pathname);
+    // URL pathname for a Windows drive is `/C:/...`; Pyright expects `C:/...`.
+    if (/^\/[A-Za-z]:\//.test(path)) path = path.slice(1);
+    return path;
+  } catch {
+    return null;
+  }
+}
+
+function pythonServerSettings(rootUri: string, pythonVenv: string | null): Record<string, unknown> {
+  const analysis: Record<string, unknown> = {
+    autoSearchPaths: true,
+    diagnosticMode: 'workspace',
+    useLibraryCodeForTypes: true,
+  };
+  const rootPath = fileUriToPath(rootUri);
+  if (rootPath && pythonVenv) {
+    // Pyright reads venvPath/venv from its language-server settings when a
+    // project config does not provide them. Project pyrightconfig.json or
+    // pyproject.toml remains authoritative when present.
+    analysis.venvPath = rootPath;
+    analysis.venv = pythonVenv;
+  }
+  return { python: { analysis } };
+}
+
 async function performInitialize(
   language: string,
   rootUri: string,
   set: (partial: Partial<LspState>) => void,
+  pythonVenv: string | null,
 ): Promise<void> {
   try {
+    const pythonSettings = language === 'python' ? pythonServerSettings(rootUri, pythonVenv) : null;
     const result = (await sendRequest(language, 'initialize', {
       processId: null,
       rootUri,
@@ -162,6 +194,7 @@ async function performInitialize(
             },
           }
         : {}),
+      ...(pythonSettings ? { initializationOptions: { settings: pythonSettings } } : {}),
       capabilities: {
         textDocument: {
           synchronization: { didSave: true },
@@ -193,6 +226,9 @@ async function performInitialize(
       },
     })) as { serverInfo?: { version?: string } } | undefined;
     sendNotification(language, 'initialized', {});
+    if (pythonSettings) {
+      sendNotification(language, 'workspace/didChangeConfiguration', { settings: pythonSettings });
+    }
     initializedLanguages.add(language);
     rustFallbackRestarting.delete(language);
     set({
@@ -233,7 +269,7 @@ function handleServerMessage(msg: ServerMessage, set: (partial: Partial<LspState
   switch (msg.type) {
     case 'ready':
       set({ rootUri: msg.root_uri, readyLanguage: msg.language });
-      void performInitialize(msg.language, msg.root_uri, set);
+      void performInitialize(msg.language, msg.root_uri, set, msg.python_venv ?? null);
       break;
     case 'fetch_progress':
       set({ status: 'fetching', fetchProgress: { downloaded: msg.downloaded, total: msg.total } });

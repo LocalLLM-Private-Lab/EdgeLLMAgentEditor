@@ -18,9 +18,13 @@ interface LspLocation {
 }
 
 interface LspHover {
-  contents: string | { value: string } | Array<string | { value: string }>;
+  contents: string | LspHoverContent | Array<string | LspHoverContent>;
   range?: LspRange;
 }
+
+type LspHoverContent =
+  | { value: string; kind?: 'plaintext' | 'markdown' }
+  | { language: string; value: string };
 
 interface LspMarkupContent {
   kind: 'plaintext' | 'markdown';
@@ -85,11 +89,19 @@ function toLspLocations(result: unknown): LspLocation[] {
 }
 
 function hoverContentsToString(contents: LspHover['contents']): string {
+  const contentToString = (content: string | LspHoverContent): string => {
+    if (typeof content === 'string') return content;
+    if ('language' in content) {
+      return `\`\`\`${content.language}\n${content.value}\n\`\`\``;
+    }
+    return content.value;
+  };
+
   if (typeof contents === 'string') return contents;
   if (Array.isArray(contents)) {
-    return contents.map((c) => (typeof c === 'string' ? c : c.value)).join('\n\n');
+    return contents.map(contentToString).join('\n\n');
   }
-  return contents.value;
+  return contentToString(contents);
 }
 
 function markupToString(value: unknown): string | undefined {

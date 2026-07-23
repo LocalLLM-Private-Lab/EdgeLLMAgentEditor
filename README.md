@@ -93,6 +93,8 @@ install-native-messaging-host.bat
 
 言語サーバーはファイル拡張子から自動選択される。Rust以外はまずPATH上の実行ファイルを探し、見つからない場合に自動導入を試みる。npmを使う言語ではnpm、Rubyではgem、C/C++ではOSに応じたパッケージマネージャーが必要になる。導入先はユーザー領域であり、通常は管理者権限を必要としない。
 
+Python(`.py`/`.pyw`/`.pyi`)とTcl(`.tcl`/`.tk`/`.itcl`)はTextMate文法によるシンタックスカラーに対応している。TclはLSP未対応。
+
 #### ワークスペースルートの指定
 
 Native Messagingで起動した`lsp-host`の作業ディレクトリは、通常プロジェクトフォルダとは異なる。LSPが`node_modules`や設定ファイルを正しく見つけられるよう、ステータスバーのLSP設定からプロジェクトの絶対パスをワークスペースルートとして指定する。TypeScript/JavaScript、Pythonなどのプロジェクト設定を利用する場合は特に指定を推奨する。

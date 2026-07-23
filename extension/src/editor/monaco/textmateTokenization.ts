@@ -27,6 +27,8 @@ const LANG_IMPORTS: Record<string, LanguageInput> = {
   rust: () => import('@shikijs/langs/rust'),
   makefile: () => import('@shikijs/langs/makefile'),
   dockerfile: () => import('@shikijs/langs/dockerfile'),
+  // Python uses the same TextMate/Shiki provider as Rust and TypeScript;
+  // keep every Python-family extension on this grammar as well.
   python: () => import('@shikijs/langs/python'),
   go: () => import('@shikijs/langs/go'),
   ruby: () => import('@shikijs/langs/ruby'),
@@ -34,6 +36,7 @@ const LANG_IMPORTS: Record<string, LanguageInput> = {
   cpp: () => import('@shikijs/langs/cpp'),
   'system-verilog': () => import('@shikijs/langs/system-verilog'),
   verilog: () => import('@shikijs/langs/verilog'),
+  tcl: () => import('@shikijs/langs/tcl'),
 };
 
 let highlighterPromise: Promise<HighlighterCore> | null = null;

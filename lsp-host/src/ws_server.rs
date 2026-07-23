@@ -77,6 +77,34 @@ fn default_root_dir() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
+fn python_venv_name(root_dir: &Path) -> Option<String> {
+    for name in [".venv", "venv", "env"] {
+        let venv_dir = root_dir.join(name);
+        let python = if cfg!(windows) {
+            [
+                venv_dir.join("Scripts/python.exe"),
+                venv_dir.join("Scripts/python3.exe"),
+            ]
+        } else {
+            [venv_dir.join("bin/python"), venv_dir.join("bin/python3")]
+        };
+        if python.iter().any(|path| path.is_file()) {
+            return Some(name.to_string());
+        }
+    }
+    None
+}
+
+fn ready_message(language: String, root_dir: &Path) -> ServerMessage {
+    ServerMessage::Ready {
+        python_venv: (language == "python")
+            .then(|| python_venv_name(root_dir))
+            .flatten(),
+        root_uri: root_uri(root_dir),
+        language,
+    }
+}
+
 struct ActiveSession {
     server: LanguageServerSession,
     root_dir: PathBuf,
@@ -107,6 +135,7 @@ const STDIO_ARGS: &[&str] = &["--stdio"];
 const SOLARGRAPH_ARGS: &[&str] = &["stdio"];
 const PYRIGHT_PACKAGES: &[&str] = &["pyright"];
 const WEB_PACKAGES: &[&str] = &["vscode-langservers-extracted"];
+const SYSTEMVERILOG_PACKAGES: &[&str] = &["@imc-trading/svlangserver"];
 // typescript-language-server currently requires the classic tsserver.js
 // entrypoint, which is not included in the TypeScript 7.x package layout.
 // Keep the auto-installed compiler on the latest compatible 5.x release.
@@ -190,6 +219,21 @@ fn external_server_candidates(language: &str) -> Vec<ExternalServerCandidate> {
                 executable: "typescript-language-server",
             }),
         }],
+        "verilog" | "system-verilog" => vec![
+            ExternalServerCandidate {
+                program: "verible-verilog-ls",
+                args: EMPTY_ARGS,
+                auto_install: None,
+            },
+            ExternalServerCandidate {
+                program: "svlangserver",
+                args: EMPTY_ARGS,
+                auto_install: Some(AutoInstall::Npm {
+                    packages: SYSTEMVERILOG_PACKAGES,
+                    executable: "svlangserver",
+                }),
+            },
+        ],
         _ => vec![],
     }
 }
@@ -257,6 +301,7 @@ fn npm_root(executable: &str) -> PathBuf {
         "pyright-langserver" => "python",
         "vscode-html-language-server" | "vscode-css-language-server" => "web",
         "typescript-language-server" => "typescript",
+        "svlangserver" => "verilog",
         _ => executable,
     };
     npm_base_root().join(scope)
@@ -664,10 +709,7 @@ async fn handle_socket(socket: WebSocket, active_connections: Arc<AtomicUsize>) 
                     if let Some(active) = guard.get(&language)
                         && active.root_dir == requested_root
                     {
-                        let _ = out_tx.send(ServerMessage::Ready {
-                            language,
-                            root_uri: root_uri(&active.root_dir),
-                        });
+                        let _ = out_tx.send(ready_message(language, &active.root_dir));
                         continue;
                     }
 
@@ -696,18 +738,14 @@ async fn handle_socket(socket: WebSocket, active_connections: Arc<AtomicUsize>) 
                     .await
                     {
                         Ok(server) => {
-                            let root_uri_str = root_uri(&requested_root);
                             session_slot.lock().await.insert(
                                 language_for_task.clone(),
                                 ActiveSession {
                                     server,
-                                    root_dir: requested_root,
+                                    root_dir: requested_root.clone(),
                                 },
                             );
-                            let _ = out_tx2.send(ServerMessage::Ready {
-                                language: language_for_task,
-                                root_uri: root_uri_str,
-                            });
+                            let _ = out_tx2.send(ready_message(language_for_task, &requested_root));
                         }
                         Err(err) => {
                             let _ = out_tx2.send(ServerMessage::FetchError {
@@ -740,29 +778,26 @@ async fn handle_socket(socket: WebSocket, active_connections: Arc<AtomicUsize>) 
                     continue;
                 };
                 let _ = active.server.kill();
+                let root_dir = active.root_dir.clone();
                 let session_slot = sessions.clone();
                 let out_tx2 = out_tx.clone();
                 tokio::spawn(async move {
                     match ensure_language_server_session(
                         out_tx2.clone(),
-                        active.root_dir.clone(),
+                        root_dir.clone(),
                         &language,
                     )
                     .await
                     {
                         Ok(server) => {
-                            let root_uri_str = root_uri(&active.root_dir);
                             session_slot.lock().await.insert(
                                 language.clone(),
                                 ActiveSession {
                                     server,
-                                    root_dir: active.root_dir,
+                                    root_dir: root_dir.clone(),
                                 },
                             );
-                            let _ = out_tx2.send(ServerMessage::Ready {
-                                language,
-                                root_uri: root_uri_str,
-                            });
+                            let _ = out_tx2.send(ready_message(language, &root_dir));
                         }
                         Err(err) => {
                             let _ = out_tx2.send(ServerMessage::FetchError {
@@ -821,5 +856,16 @@ mod tests {
             npm_root("vscode-html-language-server"),
             npm_root("vscode-css-language-server")
         );
+    }
+
+    #[test]
+    fn verilog_languages_have_server_fallbacks() {
+        for language in ["verilog", "system-verilog"] {
+            let candidates = external_server_candidates(language);
+            assert_eq!(candidates.len(), 2);
+            assert_eq!(candidates[0].program, "verible-verilog-ls");
+            assert_eq!(candidates[1].program, "svlangserver");
+            assert!(candidates[1].auto_install.is_some());
+        }
     }
 }

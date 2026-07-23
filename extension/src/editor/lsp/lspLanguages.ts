@@ -12,6 +12,8 @@ export const LSP_LANGUAGE_IDS = [
   'css',
   'javascript',
   'typescript',
+  'verilog',
+  'system-verilog',
 ] as const;
 
 export type LspLanguageId = (typeof LSP_LANGUAGE_IDS)[number];

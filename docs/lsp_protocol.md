@@ -30,7 +30,7 @@
 
 | type | フィールド | 説明 |
 |---|---|---|
-| `open_session` | `language, workspace_root?` | 指定言語のLSPセッションを開始。対応言語はRust/C/C++/Python/Ruby/HTML/CSS/JavaScript/TypeScript。`workspace_root` は絶対パス文字列(省略可) |
+| `open_session` | `language, workspace_root?` | 指定言語のLSPセッションを開始。対応言語はRust/C/C++/Python/Ruby/HTML/CSS/JavaScript/TypeScript/Verilog/SystemVerilog。`workspace_root` は絶対パス文字列(省略可) |
 | `lsp` | `language, payload` | 指定言語の生のLSP JSON-RPCオブジェクト(`initialize`/`textDocument/didOpen`等)。ホストは中身を一切解釈せず、その言語サーバーのstdinへ転送する |
 | `restart_session` | `language` | Rustのbuild scriptクラッシュ検知後、同じワークスペースで言語サーバーを再起動する |
 | `close_session` | (なし) | 現在のセッションの言語サーバープロセスを終了 |
@@ -71,8 +71,9 @@
 | HTML | `vscode-html-language-server --stdio` | PATHを優先。無ければnpmのユーザー領域へ自動導入 |
 | CSS | `vscode-css-language-server --stdio` | PATHを優先。無ければnpmのユーザー領域へ自動導入 |
 | JavaScript/TypeScript | `typescript-language-server --stdio` | PATHを優先。無ければTypeScriptとサーバーをnpmのユーザー領域へ自動導入 |
+| Verilog/SystemVerilog | `verible-verilog-ls` または `svlangserver` | PATHを優先。無ければ`@imc-trading/svlangserver`をnpmのユーザー領域へ自動導入 |
 
-MakefileとDockerfileはシンタックスカラーに対応しているが、LSPは未対応。
+MakefileとDockerfileはシンタックスカラーに対応しているが、LSPは未対応。Pythonはプロジェクトルート内の`pyrightconfig.json`/`pyproject.toml`を優先し、`.venv`/`venv`/`env`を自動検出してPyrightへ通知する。
 
 これらはすべて標準のLSPリクエスト/通知であり、ホスト側に個別のメソッド実装は持たない。新しい機能を追加する場合は、`lspStore.ts`のリクエストと`lspProviders.ts`のMonacoプロバイダを対応させ、`initialize`のクライアント能力も必要に応じて更新する。
 

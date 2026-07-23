@@ -17,6 +17,8 @@ const EXTENSION_TO_LANGUAGE: Record<string, string> = {
   mk: 'makefile',
   rs: 'rust',
   py: 'python',
+  pyw: 'python',
+  pyi: 'python',
   yml: 'yaml',
   yaml: 'yaml',
   toml: 'toml',
@@ -36,6 +38,9 @@ const EXTENSION_TO_LANGUAGE: Record<string, string> = {
   sv: 'system-verilog',
   svh: 'system-verilog',
   v: 'verilog',
+  tcl: 'tcl',
+  tk: 'tcl',
+  itcl: 'tcl',
 };
 
 export function languageFromFilename(name: string): string {

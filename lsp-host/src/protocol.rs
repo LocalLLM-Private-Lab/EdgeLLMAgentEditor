@@ -45,6 +45,8 @@ pub enum ServerMessage {
     Ready {
         language: String,
         root_uri: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        python_venv: Option<String>,
     },
     FetchProgress {
         downloaded: u64,

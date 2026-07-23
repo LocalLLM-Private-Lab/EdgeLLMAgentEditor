@@ -12,7 +12,7 @@ export type ClientMessage =
   | { type: 'close_session' };
 
 export type ServerMessage =
-  | { type: 'ready'; language: string; root_uri: string }
+  | { type: 'ready'; language: string; root_uri: string; python_venv?: string }
   | { type: 'fetch_progress'; downloaded: number; total: number | null }
   | { type: 'install_progress'; language: string; message: string }
   | { type: 'fetch_error'; message: string }

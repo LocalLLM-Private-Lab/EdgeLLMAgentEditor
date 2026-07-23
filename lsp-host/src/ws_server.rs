@@ -12,8 +12,10 @@ use futures_util::{SinkExt, StreamExt};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Command;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use tokio::sync::{Mutex, mpsc};
+use tokio::time::{Duration, sleep};
 
 use crate::auth::is_authorized;
 use crate::config::HostConfig;
@@ -25,6 +27,7 @@ use crate::rust_analyzer::LanguageServerSession;
 pub struct AppState {
     pub config: HostConfig,
     pub expected_origin: String,
+    pub active_connections: Arc<AtomicUsize>,
 }
 
 pub fn build_router(state: AppState) -> Router {
@@ -49,7 +52,10 @@ async fn ws_handler(
         return (StatusCode::FORBIDDEN, "forbidden").into_response();
     }
     let token = state.config.token.clone();
-    ws.protocols([token]).on_upgrade(handle_socket)
+    let active_connections = state.active_connections.clone();
+    active_connections.fetch_add(1, Ordering::AcqRel);
+    ws.protocols([token])
+        .on_upgrade(move |socket| handle_socket(socket, active_connections))
 }
 
 /// `dir` as a `file:///`-prefixed URI, built with the `url` crate rather
@@ -308,6 +314,14 @@ fn run_program(
     if let Some(dir) = current_dir {
         command.current_dir(dir);
     }
+
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        command.creation_flags(CREATE_NO_WINDOW);
+    }
+
     let output = command.output()?;
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
@@ -592,7 +606,7 @@ async fn ensure_language_server_session(
     )
 }
 
-async fn handle_socket(socket: WebSocket) {
+async fn handle_socket(socket: WebSocket, active_connections: Arc<AtomicUsize>) {
     let (mut ws_tx, mut ws_rx) = socket.split();
     let (out_tx, mut out_rx) = mpsc::unbounded_channel::<ServerMessage>();
 
@@ -770,6 +784,21 @@ async fn handle_socket(socket: WebSocket) {
         let _ = active.server.kill();
     }
     writer_task.abort();
+
+    if active_connections.fetch_sub(1, Ordering::AcqRel) == 1 {
+        tokio::spawn(async move {
+            // Allow a browser reload to reconnect before shutting down the
+            // detached host. A closed editor with no reconnect exits shortly
+            // afterward and releases the lsp-host.exe job as well.
+            sleep(Duration::from_secs(3)).await;
+            if active_connections.load(Ordering::Acquire) == 0 {
+                if let Some(port) = crate::config::read_active_port() {
+                    crate::config::clear_active_port(port);
+                }
+                std::process::exit(0);
+            }
+        });
+    }
 }
 
 #[cfg(test)]

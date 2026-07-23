@@ -89,6 +89,13 @@ impl LanguageServerSession {
         language: &str,
         out_tx: UnboundedSender<ServerMessage>,
     ) -> anyhow::Result<Self> {
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            const CREATE_NO_WINDOW: u32 = 0x08000000;
+            command.creation_flags(CREATE_NO_WINDOW);
+        }
+
         let monitor_build_scripts = language.eq_ignore_ascii_case("rust");
         let mut child = command
             .current_dir(root_dir)

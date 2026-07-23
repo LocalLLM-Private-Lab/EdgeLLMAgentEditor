@@ -1,3 +1,5 @@
+#![cfg_attr(windows, windows_subsystem = "windows")]
+
 mod auth;
 mod config;
 mod fetch;
@@ -69,6 +71,7 @@ async fn main() -> anyhow::Result<()> {
     let state = ws_server::AppState {
         config: cfg.clone(),
         expected_origin,
+        active_connections: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     };
     let app = ws_server::build_router(state);
 

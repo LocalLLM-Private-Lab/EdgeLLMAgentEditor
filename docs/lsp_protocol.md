@@ -88,7 +88,7 @@ MakefileとDockerfileはシンタックスカラーに対応しているが、LS
 
 ## セッションのライフサイクル
 
-言語サーバープロセスはWebSocket接続にスコープされる(`terminal-host`のPTYセッションと同じ)。1本のWebSocketに言語ごとのサーバーを多重化する。接続が切れる(タブのリロード等)と、実行中の言語サーバーは`kill`され、再接続後にアクティブだった言語ごとに`open_session`を送り直す(解析インデックスは再構築が必要)。
+言語サーバープロセスはWebSocket接続にスコープされる(`terminal-host`のPTYセッションと同じ)。1本のWebSocketに言語ごとのサーバーを多重化する。接続が切れる(タブのリロード等)と、実行中の言語サーバーは`kill`され、再接続後にアクティブだった言語ごとに`open_session`を送り直す(解析インデックスは再構築が必要)。全WebSocket接続が切れた場合は、ブラウザのリロードによる再接続を待つ3秒の猶予後、`lsp-host.exe`自身も終了する。
 
 同一接続内で複数回`open_session`を送った場合:
 - 同じ`language`かつ、送られた`workspace_root`(省略時は`default_root_dir()`)が既存セッションのrootと**同じ**なら、`Ready`を再送するだけで新規プロセスは起動しない。
@@ -98,5 +98,5 @@ MakefileとDockerfileはシンタックスカラーに対応しているが、LS
 
 - Rust以外の言語サーバーはまずユーザー環境のPATHから解決し、未インストールの場合はユーザー領域への自動導入を試みる。Node系には`npm`、Rubyには`gem`、C/C++にはWindowsなら`winget`/`scoop`/`choco`、macOSなら`brew`が必要。LinuxのclangdはOSのパッケージマネージャーで事前導入する必要がある。自動導入の進捗と失敗理由はステータスバーに表示する。
 - `workspace_root`を指定しない場合のrootUriはプロセス起動ディレクトリになり、ブラウザ側FSAワークスペースと手動で一致させる必要がある。ステータスバーから絶対パスを指定すれば変更できる。
-- WebSocket接続が切れるとプロセスごと終了する(セッション永続化は未対応)。
+- WebSocket接続が切れるとプロセスごと終了する(セッション永続化は未対応)。Windowsでは`lsp-host.exe`および言語サーバーをコンソール非表示で起動する。
 - Rustの自動フェッチはGitHub Releases APIへの外部HTTPS通信を必要とする(`terminal-host`には無かった新しい能力)。一度キャッシュ済みになれば、以降のRust `open_session`はネットワークアクセスなしでキャッシュ済みバイナリを再利用する(`fetch::find_cached_exe()`)。

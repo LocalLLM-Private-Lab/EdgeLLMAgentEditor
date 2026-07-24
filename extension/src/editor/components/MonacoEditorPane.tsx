@@ -6,9 +6,10 @@ import { EmacsExtension, registerGlobalCommand } from 'monaco-emacs';
 import { useEditorTabsStore } from '../state/editorTabsStore';
 import { useKeybindingStore, type VimSubMode } from '../state/keybindingStore';
 import { setupMonacoEnvironment } from '../monaco/setupMonacoEnvironment';
-import { setActiveEditor } from '../monaco/editorInstanceRegistry';
+import { getActiveEditor, setActiveEditor } from '../monaco/editorInstanceRegistry';
 import { getKeybindingStatusNode } from '../monaco/keybindingStatusRegistry';
 import { ensureLspProvidersRegistered } from '../lsp/lspProviders';
+import { isCustomThemeReady, TEXTMATE_THEME_ID } from '../monaco/textmateTokenization';
 
 setupMonacoEnvironment();
 ensureLspProvidersRegistered();
@@ -441,33 +442,51 @@ class BadgeVimStatusBar extends VimStatusBar {
   }
 }
 
-export function MonacoEditorPane() {
+export function MonacoEditorPane({ groupId }: { groupId: string }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const editorRef = useRef<monaco.editor.IStandaloneCodeEditor | null>(null);
   const activeBindingRef = useRef<KeybindingBinding | null>(null);
 
   const openFiles = useEditorTabsStore((s) => s.openFiles);
-  const activeFileId = useEditorTabsStore((s) => s.activeFileId);
+  const groupActiveFileId = useEditorTabsStore((s) => s.groups[groupId]?.activeFileId ?? null);
   const saveFile = useEditorTabsStore((s) => s.saveFile);
+  const setFocusedGroup = useEditorTabsStore((s) => s.setFocusedGroup);
   const keybindingMode = useKeybindingStore((s) => s.mode);
 
   useEffect(() => {
     if (!containerRef.current) return;
     // 'dark-plus' isn't registered until the first ensureLanguageTokenization
     // (fired from openFile) runs shikiToMonaco — before that, an unknown
-    // theme name would silently fall back to Monaco's *light* default. Start
-    // dark and let shikiToMonaco upgrade to 'dark-plus' once it's ready.
+    // theme name would silently fall back to Monaco's *light* default, so
+    // the very first instance in a session asks for the built-in 'vs-dark'
+    // instead and lets shikiToMonaco upgrade it once ready (Monaco's theme
+    // is process-wide, so that upgrade applies to every live instance).
+    // Once shikiToMonaco has already patched the theme service — true for
+    // every group created after the first file's been opened, e.g. when
+    // splitting the editor — 'vs-dark' itself is no longer a theme name it
+    // recognizes and create() throws; TEXTMATE_THEME_ID is the only valid
+    // choice by then.
     const editor = monaco.editor.create(containerRef.current, {
       automaticLayout: true,
-      theme: 'vs-dark',
+      theme: isCustomThemeReady() ? TEXTMATE_THEME_ID : 'vs-dark',
       fontSize: 13,
       minimap: { enabled: true },
     });
     editorRef.current = editor;
+    // Every group gets its own Monaco instance; "the active editor" (what
+    // menu commands like Undo/Goto-line act on) is whichever one the user
+    // most recently focused — set immediately so it's usable before the
+    // first focus event too (matches the old single-instance behavior),
+    // then kept current via onDidFocusEditorText below.
     setActiveEditor(editor);
+    setFocusedGroup(groupId);
+    const focusListener = editor.onDidFocusEditorText(() => {
+      setActiveEditor(editor);
+      useEditorTabsStore.getState().setFocusedGroup(groupId);
+    });
 
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, () => {
-      const id = useEditorTabsStore.getState().activeFileId;
+      const id = useEditorTabsStore.getState().groups[groupId]?.activeFileId;
       if (id) void saveFile(id);
     });
 
@@ -480,7 +499,12 @@ export function MonacoEditorPane() {
     });
 
     return () => {
-      setActiveEditor(null);
+      focusListener.dispose();
+      // Only clear the registry if this instance is still the one in it —
+      // an unmounting group that *isn't* the currently-focused one (e.g.
+      // its last tab just got dragged elsewhere and the group collapsed)
+      // shouldn't blank out a different, still-focused group's editor.
+      if (getActiveEditor() === editor) setActiveEditor(null);
       editor.dispose();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -489,9 +513,9 @@ export function MonacoEditorPane() {
   useEffect(() => {
     const editor = editorRef.current;
     if (!editor) return;
-    const activeTab = openFiles.find((f) => f.id === activeFileId);
+    const activeTab = openFiles.find((f) => f.id === groupActiveFileId);
     editor.setModel(activeTab ? activeTab.model : null);
-  }, [activeFileId, openFiles]);
+  }, [groupActiveFileId, openFiles]);
 
   // Applies the selected vim/emacs input-intercept layer on top of the
   // editor instance. This is separate from (and doesn't touch) the Ctrl+S /
@@ -505,7 +529,7 @@ export function MonacoEditorPane() {
     activeBindingRef.current = null;
 
     const doSave = () => {
-      const id = useEditorTabsStore.getState().activeFileId;
+      const id = useEditorTabsStore.getState().groups[groupId]?.activeFileId;
       if (id) void saveFile(id);
     };
 
@@ -566,7 +590,7 @@ export function MonacoEditorPane() {
       activeBindingRef.current?.dispose();
       activeBindingRef.current = null;
     };
-  }, [keybindingMode, saveFile]);
+  }, [keybindingMode, saveFile, groupId]);
 
   return <div ref={containerRef} className="monaco-editor-pane" />;
 }

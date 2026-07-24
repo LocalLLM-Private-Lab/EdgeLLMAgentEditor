@@ -1,0 +1,33 @@
+.file-icon-generic,
+.file-icon-svg-wrap,
+.file-icon-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 16px;
+  flex-shrink: 0;
+}
+
+.file-icon-svg {
+  width: 16px;
+  height: 16px;
+}
+
+.file-icon-badge {
+  font-size: 8px;
+  font-weight: 800;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+  letter-spacing: -0.3px;
+}
+
+.file-icon-badge-plain {
+  font-size: 9px;
+}
+
+.file-icon-badge-square {
+  width: 16px;
+  height: 16px;
+  border: 1.4px solid currentColor;
+  border-radius: 3px;
+}

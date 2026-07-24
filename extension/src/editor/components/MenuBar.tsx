@@ -11,9 +11,21 @@ export interface MenuItem {
   checked?: boolean;
 }
 
+/** A thin divider line between item groups — VS Code uses these to set
+ * off, e.g., File's "Preferences" group from its file-management items. */
+export interface MenuSeparator {
+  separator: true;
+}
+
+export type MenuEntry = MenuItem | MenuSeparator;
+
 export interface Menu {
   label: string;
-  items: MenuItem[];
+  items: MenuEntry[];
+}
+
+function isSeparator(entry: MenuEntry): entry is MenuSeparator {
+  return 'separator' in entry;
 }
 
 export function MenuBar({ menus }: { menus: Menu[] }) {
@@ -36,20 +48,24 @@ export function MenuBar({ menus }: { menus: Menu[] }) {
           </button>
           {openMenu === menu.label && (
             <div className="menu-dropdown" onClick={(e) => e.stopPropagation()}>
-              {menu.items.map((item) => (
-                <button
-                  key={item.label}
-                  className="menu-dropdown-item"
-                  disabled={item.disabled}
-                  onClick={() => {
-                    item.onClick();
-                    setOpenMenu(null);
-                  }}
-                >
-                  <span className="menu-dropdown-item-check">{item.checked ? '✓' : ''}</span>
-                  {item.label}
-                </button>
-              ))}
+              {menu.items.map((item, i) =>
+                isSeparator(item) ? (
+                  <div key={`sep-${i}`} className="menu-dropdown-separator" />
+                ) : (
+                  <button
+                    key={item.label}
+                    className="menu-dropdown-item"
+                    disabled={item.disabled}
+                    onClick={() => {
+                      item.onClick();
+                      setOpenMenu(null);
+                    }}
+                  >
+                    <span className="menu-dropdown-item-check">{item.checked ? '✓' : ''}</span>
+                    {item.label}
+                  </button>
+                ),
+              )}
             </div>
           )}
         </div>

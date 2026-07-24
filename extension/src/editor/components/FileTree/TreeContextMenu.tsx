@@ -20,6 +20,7 @@ interface TreeContextMenuProps {
   onRename: (node: FileTreeNode) => void;
   onDelete: (node: FileTreeNode) => void;
   onCopy: (node: FileTreeNode) => void;
+  onCopyRelativePath: (node: FileTreeNode) => void;
   /** contextNode is where to paste — null means the root/empty area. */
   onPaste: (contextNode: FileTreeNode | null) => void;
   canPaste: boolean;
@@ -33,6 +34,7 @@ export function TreeContextMenu({
   onRename,
   onDelete,
   onCopy,
+  onCopyRelativePath,
   onPaste,
   canPaste,
 }: TreeContextMenuProps) {
@@ -52,6 +54,7 @@ export function TreeContextMenu({
   }
   if (node) {
     items.push(
+      { label: '相対パスのコピー', onClick: () => onCopyRelativePath(node) },
       { label: '名前を変更...', onClick: () => onRename(node) },
       { label: '削除', onClick: () => onDelete(node) },
     );

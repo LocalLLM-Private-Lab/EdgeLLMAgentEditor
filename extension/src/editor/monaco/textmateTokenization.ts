@@ -39,6 +39,14 @@ const LANG_IMPORTS: Record<string, LanguageInput> = {
   tcl: () => import('@shikijs/langs/tcl'),
 };
 
+// Once shikiToMonaco has patched Monaco's theme service (see loadLanguage
+// below), it only resolves theme names it knows about — Monaco's own
+// built-in 'vs-dark' stops being a valid `monaco.editor.create({ theme })`
+// value and throws instead. Callers creating a *new* editor instance after
+// that point (e.g. splitting the editor into another group) need to know
+// to ask for TEXTMATE_THEME_ID instead.
+let customThemeReady = false;
+
 let highlighterPromise: Promise<HighlighterCore> | null = null;
 
 function getHighlighter(): Promise<HighlighterCore> {
@@ -75,6 +83,14 @@ async function loadLanguage(langId: string, loader: LanguageInput): Promise<void
   // providers for languages loaded in the highlighter *at call time*, it
   // doesn't hook future loads.
   shikiToMonaco(highlighter, monaco);
+  customThemeReady = true;
+}
+
+/** Whether it's now safe to ask for Monaco's built-in 'vs-dark' theme when
+ * creating a new editor instance — false once shikiToMonaco has patched the
+ * theme service, at which point TEXTMATE_THEME_ID must be used instead. */
+export function isCustomThemeReady(): boolean {
+  return customThemeReady;
 }
 
 /** Loads and wires TextMate-based tokenization for `langId`, once. No-op for

@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react';
+import { getStoredValue, setStoredValue } from '../shared/chromeStorage';
 import { useWorkspaceStore } from './state/workspaceStore';
 import { useEditorTabsStore } from './state/editorTabsStore';
 import { useTerminalStore } from './state/terminalStore';
@@ -6,33 +7,28 @@ import { useKeybindingStore } from './state/keybindingStore';
 import { useLspStore } from './lsp/lspStore';
 import { useRunCommandStore, extensionOf, buildRunCommand } from './state/runCommandStore';
 import { resolveRelativeFilePath } from './terminal/resolveRelativeFilePath';
-import { getStoredValue, setStoredValue } from '../shared/chromeStorage';
+import { useDockStore, panelsInZone } from './state/dockStore';
 import { FileTree } from './components/FileTree/FileTree';
-import { EditorTabs } from './components/EditorTabs/EditorTabs';
-import { MonacoEditorPane } from './components/MonacoEditorPane';
+import { EditorToolbar } from './components/EditorToolbar';
+import { EditorLayout } from './components/EditorLayout';
+import { EditorDragOverlay } from './components/EditorDragOverlay';
 import { WelcomeScreen } from './components/WelcomeScreen';
 import { StatusBar } from './components/StatusBar';
-import { BottomPanel, type BottomPanelTab } from './components/BottomPanel';
+import { DockPanel } from './components/DockPanel';
+import { DockDragOverlay } from './components/DockDragOverlay';
+import { ActivityBar } from './components/ActivityBar';
 import { MenuBar, type Menu } from './components/MenuBar';
-import { RunCommandSettingsModal } from './components/RunCommandSettingsModal';
-import { PromptTemplateSettingsModal } from './components/PromptTemplateSettingsModal';
-import { PlanPromptTemplateSettingsModal } from './components/PlanPromptTemplateSettingsModal';
+import { SettingsModal, type SettingsCategory } from './components/SettingsModal';
 import { ResizeHandle } from './components/ResizeHandle';
 import { QuickOpenModal } from './components/QuickOpenModal';
+import { TextEditContextMenu, type TextEditMenuState } from './components/TextEditContextMenu';
 import { useResizable } from './hooks/useResizable';
 import { usePromptTemplateStore } from './state/promptTemplateStore';
 import { usePlanPromptTemplateStore } from './state/planPromptTemplateStore';
 import { getActiveEditor } from './monaco/editorInstanceRegistry';
 import { ensureFileAtPath } from './copilot/resolveWorkspaceFile';
 import { writeFileText } from './fs/fsaWorkspace';
-
-const PANEL_STATE_STORAGE_KEY = 'uiPanelState';
-
-interface PanelState {
-  terminalEnabled: boolean;
-  copilotEnabled: boolean;
-  activePanelTab: BottomPanelTab | null;
-}
+import ceLogoUrl from './assets/ce-logo.png';
 
 export default function App() {
   const status = useWorkspaceStore((s) => s.status);
@@ -62,16 +58,18 @@ export default function App() {
   const runCommands = useRunCommandStore((s) => s.commands);
   const loadRunCommands = useRunCommandStore((s) => s.loadCommands);
   const queueRunRequest = useTerminalStore((s) => s.queueRunRequest);
-  const [runSettingsOpen, setRunSettingsOpen] = useState(false);
-  const [promptSettingsOpen, setPromptSettingsOpen] = useState(false);
-  const [planPromptSettingsOpen, setPlanPromptSettingsOpen] = useState(false);
+  const [settingsCategory, setSettingsCategory] = useState<SettingsCategory | null>(null);
   const loadPromptTemplates = usePromptTemplateStore((s) => s.loadTemplates);
   const loadPlanPromptTemplates = usePlanPromptTemplateStore((s) => s.loadTemplates);
 
-  const [terminalEnabled, setTerminalEnabled] = useState(false);
-  const [copilotEnabled, setCopilotEnabled] = useState(false);
-  const [activePanelTab, setActivePanelTab] = useState<BottomPanelTab | null>(null);
-  const [panelStateLoaded, setPanelStateLoaded] = useState(false);
+  const dockPanels = useDockStore((s) => s.panels);
+  const dockActiveByZone = useDockStore((s) => s.activeByZone);
+  const dockSplitByZone = useDockStore((s) => s.splitByZone);
+  const dockSplitRatio = useDockStore((s) => s.splitRatio);
+  const setDockSplitRatio = useDockStore((s) => s.setSplitRatio);
+  const loadDock = useDockStore((s) => s.load);
+  const toggleDockVisible = useDockStore((s) => s.toggleVisible);
+  const setDockVisible = useDockStore((s) => s.setVisible);
 
   const sidebar = useResizable({
     storageKey: 'uiSidebarWidth',
@@ -81,15 +79,55 @@ export default function App() {
     axis: 'x',
     directionSign: 1,
   });
-  const bottomPanel = useResizable({
-    storageKey: 'uiBottomPanelHeight',
+  const [sidebarVisible, setSidebarVisible] = useState(true);
+  useEffect(() => {
+    void getStoredValue<boolean>('uiSidebarVisible').then((stored) => {
+      if (stored !== undefined) setSidebarVisible(stored);
+    });
+  }, []);
+  function toggleSidebarVisible() {
+    setSidebarVisible((cur) => {
+      const next = !cur;
+      void setStoredValue('uiSidebarVisible', next);
+      return next;
+    });
+  }
+  // One resizable size per dock zone — VS Code-style docking means Terminal
+  // and Copilot can each end up on any of the four edges independently, so
+  // each edge needs its own remembered size regardless of which panel (or
+  // panels, if dragged onto the same edge) currently occupies it.
+  const topDock = useResizable({
+    storageKey: 'uiDockSize:top',
+    defaultSize: 220,
+    min: 100,
+    max: 700,
+    axis: 'y',
+    directionSign: 1,
+  });
+  const bottomDock = useResizable({
+    storageKey: 'uiDockSize:bottom',
     defaultSize: 300,
     min: 120,
     max: 800,
     axis: 'y',
     directionSign: -1,
   });
-
+  const leftDock = useResizable({
+    storageKey: 'uiDockSize:left',
+    defaultSize: 280,
+    min: 150,
+    max: 700,
+    axis: 'x',
+    directionSign: 1,
+  });
+  const rightDock = useResizable({
+    storageKey: 'uiDockSize:right',
+    defaultSize: 320,
+    min: 150,
+    max: 700,
+    axis: 'x',
+    directionSign: -1,
+  });
   useEffect(() => {
     void restoreFromLastSession();
     void loadTerminalSettings();
@@ -98,6 +136,7 @@ export default function App() {
     void loadPlanPromptTemplates();
     void loadKeybindingMode();
     void loadLspWorkspaceRootOverride();
+    void loadDock();
   }, [
     restoreFromLastSession,
     loadTerminalSettings,
@@ -106,6 +145,7 @@ export default function App() {
     loadPlanPromptTemplates,
     loadKeybindingMode,
     loadLspWorkspaceRootOverride,
+    loadDock,
   ]);
 
   // Connects to terminal-host as soon as its settings are known, even
@@ -115,54 +155,10 @@ export default function App() {
     if (terminalSettings) connectTerminal();
   }, [terminalSettings, connectTerminal]);
 
-  // Restore which bottom-panel tabs (if any) were enabled last time.
-  useEffect(() => {
-    void getStoredValue<PanelState>(PANEL_STATE_STORAGE_KEY).then((saved) => {
-      if (saved) {
-        setTerminalEnabled(saved.terminalEnabled);
-        setCopilotEnabled(saved.copilotEnabled);
-        setActivePanelTab(saved.activePanelTab);
-      }
-      setPanelStateLoaded(true);
-    });
-  }, []);
-
-  useEffect(() => {
-    if (!panelStateLoaded) return;
-    void setStoredValue(PANEL_STATE_STORAGE_KEY, {
-      terminalEnabled,
-      copilotEnabled,
-      activePanelTab,
-    } satisfies PanelState);
-  }, [terminalEnabled, copilotEnabled, activePanelTab, panelStateLoaded]);
-
-  const isEnabled = (tab: BottomPanelTab) => (tab === 'terminal' ? terminalEnabled : copilotEnabled);
-  const setEnabled = (tab: BottomPanelTab, value: boolean) =>
-    tab === 'terminal' ? setTerminalEnabled(value) : setCopilotEnabled(value);
-  const otherTab = (tab: BottomPanelTab): BottomPanelTab => (tab === 'terminal' ? 'copilot' : 'terminal');
-
-  // View menu click: toggles that tab's on/off state independently of the
-  // other one. Turning one off removes it from the panel's tab strip
-  // entirely (rather than just switching which one is displayed) — if it
-  // was the one currently shown, fall back to the other tab if it's still
-  // enabled, or close the panel if nothing is left enabled.
-  function toggleTab(tab: BottomPanelTab) {
-    const enabling = !isEnabled(tab);
-    setEnabled(tab, enabling);
-    if (enabling) {
-      setActivePanelTab(tab);
-    } else if (activePanelTab === tab) {
-      setActivePanelTab(isEnabled(otherTab(tab)) ? otherTab(tab) : null);
-    }
-  }
-
-  // Always ensures a tab is enabled and brought into view, without the
-  // toggle-off behavior above — used when a non-menu action (e.g. Run)
-  // needs the terminal visible regardless of its current state.
-  function showTab(tab: BottomPanelTab) {
-    setEnabled(tab, true);
-    setActivePanelTab(tab);
-  }
+  const topPanels = panelsInZone(dockPanels, 'top');
+  const bottomPanels = panelsInZone(dockPanels, 'bottom');
+  const leftPanels = panelsInZone(dockPanels, 'left');
+  const rightPanels = panelsInZone(dockPanels, 'right');
 
   const runCommandTemplate = activeTab ? (runCommands[extensionOf(activeTab.name) ?? ''] ?? null) : null;
 
@@ -170,10 +166,11 @@ export default function App() {
     if (!activeTab || !runCommandTemplate) return;
     const relativePath = resolveRelativeFilePath(activeTab.pathSegments);
     queueRunRequest(buildRunCommand(runCommandTemplate, relativePath));
-    showTab('terminal');
+    setDockVisible('terminal', true);
   }
 
   const [quickOpenOpen, setQuickOpenOpen] = useState(false);
+  const [textEditMenu, setTextEditMenu] = useState<TextEditMenuState | null>(null);
 
   // Ctrl+P (Cmd+P on mac) opens quick-open from anywhere, matching VS
   // Code — preventDefault so the browser's own print dialog doesn't fire.
@@ -186,6 +183,52 @@ export default function App() {
     }
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
+  }, []);
+
+  // The browser's native right-click menu never belongs in this app —
+  // every position either has its own dedicated context menu (file tree,
+  // editor tabs, terminal, dock panel tabs, Monaco itself) or falls back
+  // to a generic 切り取り/コピー/貼り付け menu for plain text fields, or
+  // shows nothing at all if none of that applies. A capture-phase
+  // listener on the document catches every position, including ones with
+  // no dedicated menu, before any per-element handler runs; those
+  // handlers' own preventDefault()/stopPropagation() calls are unaffected
+  // since capture always fires first regardless of what happens later.
+  useEffect(() => {
+    function handleContextMenu(e: MouseEvent) {
+      e.preventDefault();
+      const target = e.target as Element | null;
+      if (!target) return;
+      // These already supply their own richer context menu (or, for
+      // Monaco/the terminal, their own native-feeling one) — never race
+      // a generic text-edit menu on top of those.
+      if (
+        target.closest(
+          '.file-tree, .dock-panel-tabs, .editor-group-tabs, .monaco-editor, .terminal-session-host',
+        )
+      ) {
+        return;
+      }
+      const isTextArea = target instanceof HTMLTextAreaElement && !target.disabled;
+      const isTextInput =
+        target instanceof HTMLInputElement &&
+        !target.disabled &&
+        ['text', 'search', 'url', 'tel', 'password', 'email', 'number'].includes(target.type);
+      if (isTextArea || isTextInput) {
+        // Stop this same event from continuing on to window, where the
+        // menu we're about to mount registers its own outside-click
+        // dismiss listener — without this, that listener catches this
+        // event's tail end on its way past and closes the menu the
+        // instant it opens (the exact self-dismiss bug already fixed for
+        // the file tree/editor tab menus, just via a different path since
+        // this one opens from a document-level capture listener instead
+        // of a per-element handler).
+        e.stopPropagation();
+        setTextEditMenu({ x: e.clientX, y: e.clientY, target: target as HTMLInputElement | HTMLTextAreaElement });
+      }
+    }
+    document.addEventListener('contextmenu', handleContextMenu, true);
+    return () => document.removeEventListener('contextmenu', handleContextMenu, true);
   }, []);
 
   async function handleSaveAs() {
@@ -224,8 +267,24 @@ export default function App() {
     editor.focus();
   }
 
+  // A single entry point into the unified settings window — its own left
+  // nav is where プロンプト/実行コマンド etc. actually live now, so File
+  // (and the activity bar's gear icon) only need to open it once.
+  function openSettings() {
+    setSettingsCategory('promptTemplates');
+  }
+
+  function handleShowAbout() {
+    const version = chrome.runtime.getManifest().version;
+    window.alert(`M365 Copilot Code Editor\nバージョン: ${version}`);
+  }
+
   const menus: Menu[] = [
     {
+      // Settings lives here (VS Code's own File > Preferences > Settings
+      // precedent) rather than as its own top-level menu — one less menu
+      // to scan, and it's grouped with the other "app-level" items instead
+      // of floating on its own.
       label: 'ファイル',
       items: [
         { label: 'ファイルへ移動... (Ctrl+P)', onClick: () => setQuickOpenOpen(true), disabled: !rootHandle },
@@ -247,6 +306,8 @@ export default function App() {
           onClick: () => void closeFolder(),
           disabled: status !== 'connected' && status !== 'needs-reconnect',
         },
+        { separator: true },
+        { label: '設定...', onClick: openSettings },
       ],
     },
     {
@@ -281,13 +342,13 @@ export default function App() {
       items: [
         {
           label: 'ターミナル',
-          onClick: () => toggleTab('terminal'),
-          checked: terminalEnabled,
+          onClick: () => toggleDockVisible('terminal'),
+          checked: dockPanels.terminal.visible,
         },
         {
           label: 'Copilot',
-          onClick: () => toggleTab('copilot'),
-          checked: copilotEnabled,
+          onClick: () => toggleDockVisible('copilot'),
+          checked: dockPanels.copilot.visible,
         },
         {
           label: '折り返しの切り替え (Alt+Z)',
@@ -316,19 +377,15 @@ export default function App() {
       ],
     },
     {
-      label: '設定',
-      items: [
-        { label: '拡張子ごとの実行コマンド...', onClick: () => setRunSettingsOpen(true) },
-        { label: 'プロンプトテンプレート...', onClick: () => setPromptSettingsOpen(true) },
-        { label: '計画プロンプトテンプレート...', onClick: () => setPlanPromptSettingsOpen(true) },
-      ],
+      label: 'ヘルプ',
+      items: [{ label: 'バージョン情報', onClick: handleShowAbout }],
     },
   ];
 
   return (
     <div className="app-shell">
       <header className="app-header">
-        <span className="app-title">M365 Copilot Code Editor</span>
+        <img className="app-title-icon" src={ceLogoUrl} alt="M365 Copilot Code Editor" />
         <MenuBar menus={menus} />
         {status === 'needs-reconnect' && (
           <button onClick={() => void reconnect()}>ワークスペースに再接続</button>
@@ -338,56 +395,117 @@ export default function App() {
         {errorMessage && <span className="app-error">{errorMessage}</span>}
       </header>
       <div className="app-body">
-        <aside className="app-sidebar" style={{ width: sidebar.size }}>
-          {status === 'connected' ? (
-            <FileTree />
-          ) : (
-            <div className="app-sidebar-empty">
-              <p>フォルダが開かれていません</p>
-              {status === 'needs-reconnect' ? (
-                <button onClick={() => void reconnect()}>ワークスペースに再接続</button>
+        <ActivityBar
+          sidebarVisible={sidebarVisible}
+          onToggleSidebar={toggleSidebarVisible}
+          onOpenSettings={openSettings}
+        />
+        {sidebarVisible && (
+          <>
+            <aside className="app-sidebar" style={{ width: sidebar.size }}>
+              {status === 'connected' ? (
+                <FileTree />
               ) : (
-                <button onClick={() => void openFolder()}>フォルダを開く</button>
+                <div className="app-sidebar-empty">
+                  <p>フォルダが開かれていません</p>
+                  {status === 'needs-reconnect' ? (
+                    <button onClick={() => void reconnect()}>ワークスペースに再接続</button>
+                  ) : (
+                    <button onClick={() => void openFolder()}>フォルダを開く</button>
+                  )}
+                </div>
               )}
-            </div>
-          )}
-        </aside>
-        <ResizeHandle axis="x" {...sidebar.handleProps} />
-        <main className="app-main">
-          <EditorTabs />
-          <div className="app-editor-area">
-            <MonacoEditorPane />
-            {status !== 'connected' && (
-              <WelcomeScreen
-                needsReconnect={status === 'needs-reconnect'}
-                onOpenFolder={() => void openFolder()}
-                onReconnect={() => void reconnect()}
+            </aside>
+            <ResizeHandle axis="x" {...sidebar.handleProps} />
+          </>
+        )}
+        {/* top/bottom are the outer bands here (full content width, VS
+            Code-style: the panel spans edge-to-edge and left/right sit
+            between it and the top band), left/right are nested inside so
+            they only span the height between top and bottom, not the
+            full content height. */}
+        <div className="app-content-column">
+          {topPanels.length > 0 && (
+            <>
+              <DockPanel
+                zone="top"
+                panelIds={topPanels}
+                activePanel={dockActiveByZone.top ?? topPanels[0]}
+                size={topDock.size}
+                split={dockSplitByZone.top ?? null}
+                splitRatio={dockSplitRatio.top ?? 0.5}
+                onSplitRatioChange={(ratio) => setDockSplitRatio('top', ratio)}
               />
+              <ResizeHandle axis="y" {...topDock.handleProps} />
+            </>
+          )}
+          <div className="app-content-row">
+            {leftPanels.length > 0 && (
+              <>
+                <DockPanel
+                  zone="left"
+                  panelIds={leftPanels}
+                  activePanel={dockActiveByZone.left ?? leftPanels[0]}
+                  size={leftDock.size}
+                  split={dockSplitByZone.left ?? null}
+                  splitRatio={dockSplitRatio.left ?? 0.5}
+                  onSplitRatioChange={(ratio) => setDockSplitRatio('left', ratio)}
+                />
+                <ResizeHandle axis="x" {...leftDock.handleProps} />
+              </>
+            )}
+            <main className="app-main">
+              <EditorToolbar />
+              <div className="app-editor-area">
+                <EditorLayout />
+                <EditorDragOverlay />
+                {status !== 'connected' && (
+                  <WelcomeScreen
+                    needsReconnect={status === 'needs-reconnect'}
+                    onOpenFolder={() => void openFolder()}
+                    onReconnect={() => void reconnect()}
+                  />
+                )}
+              </div>
+            </main>
+            {rightPanels.length > 0 && (
+              <>
+                <ResizeHandle axis="x" {...rightDock.handleProps} />
+                <DockPanel
+                  zone="right"
+                  panelIds={rightPanels}
+                  activePanel={dockActiveByZone.right ?? rightPanels[0]}
+                  size={rightDock.size}
+                  split={dockSplitByZone.right ?? null}
+                  splitRatio={dockSplitRatio.right ?? 0.5}
+                  onSplitRatioChange={(ratio) => setDockSplitRatio('right', ratio)}
+                />
+              </>
             )}
           </div>
-          {activePanelTab && (
+          {bottomPanels.length > 0 && (
             <>
-              <ResizeHandle axis="y" {...bottomPanel.handleProps} />
-              <BottomPanel
-                activeTab={activePanelTab}
-                onSelectTab={setActivePanelTab}
-                terminalEnabled={terminalEnabled}
-                copilotEnabled={copilotEnabled}
-                height={bottomPanel.size}
+              <ResizeHandle axis="y" {...bottomDock.handleProps} />
+              <DockPanel
+                zone="bottom"
+                panelIds={bottomPanels}
+                activePanel={dockActiveByZone.bottom ?? bottomPanels[0]}
+                size={bottomDock.size}
+                split={dockSplitByZone.bottom ?? null}
+                splitRatio={dockSplitRatio.bottom ?? 0.5}
+                onSplitRatioChange={(ratio) => setDockSplitRatio('bottom', ratio)}
               />
             </>
           )}
-        </main>
+        </div>
+        <DockDragOverlay />
       </div>
       <StatusBar />
-      {runSettingsOpen && <RunCommandSettingsModal onClose={() => setRunSettingsOpen(false)} />}
-      {promptSettingsOpen && (
-        <PromptTemplateSettingsModal onClose={() => setPromptSettingsOpen(false)} />
-      )}
-      {planPromptSettingsOpen && (
-        <PlanPromptTemplateSettingsModal onClose={() => setPlanPromptSettingsOpen(false)} />
+      {settingsCategory && (
+        <SettingsModal initialCategory={settingsCategory} onClose={() => setSettingsCategory(null)} />
       )}
       {quickOpenOpen && rootHandle && <QuickOpenModal onClose={() => setQuickOpenOpen(false)} />}
+      {textEditMenu && <TextEditContextMenu state={textEditMenu} onClose={() => setTextEditMenu(null)} />}
     </div>
   );
 }

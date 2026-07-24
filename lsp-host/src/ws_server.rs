@@ -240,7 +240,20 @@ fn external_server_candidates(language: &str) -> Vec<ExternalServerCandidate> {
 
 fn resolve_program(program: &str) -> anyhow::Result<PathBuf> {
     let lookup = if cfg!(windows) { "where.exe" } else { "which" };
-    let output = Command::new(lookup).arg(program).output()?;
+    let mut lookup_command = Command::new(lookup);
+    lookup_command.arg(program);
+    // Every LSP session lookup (one per language, on essentially every file
+    // open) shells out here first — without this, each one briefly flashes
+    // a console window since lsp-host itself is a windowless-subsystem
+    // process spawning a console (CUI) child (see the same fix already
+    // applied to run_program/spawn_command below).
+    #[cfg(windows)]
+    {
+        use std::os::windows::process::CommandExt;
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+        lookup_command.creation_flags(CREATE_NO_WINDOW);
+    }
+    let output = lookup_command.output()?;
     if output.status.success() {
         let stdout = String::from_utf8_lossy(&output.stdout);
         let mut paths: Vec<PathBuf> = stdout

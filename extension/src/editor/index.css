@@ -75,9 +75,10 @@ body {
   flex-shrink: 0;
 }
 
-.app-title {
-  font-weight: 600;
-  margin-right: 4px;
+.app-title-icon {
+  height: 22px;
+  width: auto;
+  flex-shrink: 0;
 }
 
 .app-header-spacer {
@@ -93,6 +94,7 @@ body {
   display: flex;
   flex: 1;
   min-height: 0;
+  position: relative;
 }
 
 .app-sidebar {
@@ -120,7 +122,7 @@ body {
   width: 100%;
 }
 
-.app-main {
+.app-content-column {
   display: flex;
   flex-direction: column;
   flex: 1;
@@ -128,9 +130,27 @@ body {
   min-height: 0;
 }
 
+.app-content-row {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.app-main {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  position: relative;
+}
+
 .app-editor-area {
   flex: 1;
   min-height: 0;
+  min-width: 0;
+  display: flex;
   position: relative;
 }
 

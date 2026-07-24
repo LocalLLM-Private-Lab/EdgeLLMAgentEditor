@@ -1,0 +1,28 @@
+/* Deliberately its own small rule rather than reusing the dock system's
+ * .dock-drag-indicator — the two drag systems are meant to stay fully
+ * independent, styling included, even though they look the same. */
+.editor-drag-indicator {
+  position: fixed;
+  z-index: 9999;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--accent-color) 35%, transparent);
+  border: 2px solid var(--accent-color);
+}
+
+/* Deliberately its own rule rather than reusing .dock-drag-ghost, for the
+ * same independence reason as the indicator above. Offset down-right of
+ * the cursor like a native OS drag image. */
+.editor-drag-ghost {
+  position: fixed;
+  z-index: 10000;
+  pointer-events: none;
+  transform: translate(14px, 14px);
+  background: var(--panel-bg);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  padding: 4px 10px;
+  font-size: 12px;
+  opacity: 0.9;
+  white-space: nowrap;
+}

@@ -1,0 +1,28 @@
+.editor-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 2px;
+  padding: 4px 6px;
+  background: var(--panel-bg);
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.editor-toolbar-button {
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font-size: 13px;
+  padding: 4px 6px;
+  border-radius: 3px;
+}
+
+.editor-toolbar-button:hover:not(:disabled) {
+  background: var(--row-hover-bg);
+}
+
+.editor-toolbar-button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}

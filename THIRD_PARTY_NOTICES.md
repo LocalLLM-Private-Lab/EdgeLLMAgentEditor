@@ -39,6 +39,22 @@ each carried under its own (predominantly MIT/Apache-2.0) upstream license.
 
 Copyright (c) Microsoft Corporation.
 
+## File-type icons in the file tree and editor tabs
+
+### devicon
+
+Copyright (c) 2015 konpa
+
+Most file-type icon glyphs in the file tree and editor tabs (TypeScript,
+JavaScript, JSON, Python, Rust, Java, HTML, CSS/Sass/Less, Go, C, C++, C#,
+Git, Markdown, YAML, Windows, Kotlin, Ruby, PHP, Swift, Dart, Perl, Lua, R,
+Scala, Haskell, Elixir, Erlang, Clojure, F#, Objective-C, Vue, Svelte,
+GraphQL, Terraform, XML, Groovy, Julia, Vim, Solidity, Elm, OCaml, SQLite,
+Docker) are simplified, single-color derivatives of the
+"plain"/"line"/"original" SVG marks from the devicon project
+(https://github.com/devicons/devicon), recolored to a single flat fill via
+CSS `currentColor` instead of their original artwork colors.
+
 ---
 
 All packages above are licensed under the MIT License unless otherwise

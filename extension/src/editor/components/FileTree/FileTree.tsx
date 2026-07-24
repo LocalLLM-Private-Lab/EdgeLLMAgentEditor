@@ -5,6 +5,7 @@ import { useWorkspaceStore, directoryTargetFor, type DirectoryTarget } from '../
 import { useEditorTabsStore } from '../../state/editorTabsStore';
 import { TreeContextMenu, type ContextMenuState } from './TreeContextMenu';
 import { InlineNameInput } from './InlineNameInput';
+import { FileIcon } from '../FileIcon';
 import './FileTree.css';
 
 interface CreatingState {
@@ -85,6 +86,10 @@ async function handleRenameConfirm(node: FileTreeNode, newName: string) {
   }
 }
 
+function handleCopyRelativePath(node: FileTreeNode) {
+  void navigator.clipboard.writeText(node.pathSegments.join('/'));
+}
+
 async function handleDeleteNode(node: FileTreeNode) {
   const kindLabel = node.kind === 'directory' ? 'フォルダ' : 'ファイル';
   if (!window.confirm(`${kindLabel}「${node.name}」を削除しますか？この操作は取り消せません。`)) {
@@ -123,6 +128,9 @@ function handleTreeNodeKeyDown(e: React.KeyboardEvent, node: FileTreeNode, isRen
   } else if (e.key === 'Delete') {
     e.preventDefault();
     void handleDeleteNode(node);
+  } else if (e.key === 'F2') {
+    e.preventDefault();
+    useFileTreeUi.getState().setRenamingNodeId(node.id);
   }
 }
 
@@ -170,7 +178,7 @@ const TreeNode = memo(function TreeNode({
           {node.kind === 'directory' ? (isExpanded ? '▼' : '▶') : ''}
         </span>
         <span className="file-tree-icon">
-          {node.kind === 'directory' ? (isExpanded ? '📂' : '📁') : '📄'}
+          {node.kind === 'directory' ? (isExpanded ? '📂' : '📁') : <FileIcon name={node.name} />}
         </span>
         {isRenaming ? (
           <InlineNameInput
@@ -253,6 +261,7 @@ export function FileTree() {
           onRename={(node) => useFileTreeUi.getState().setRenamingNodeId(node.id)}
           onDelete={(node) => void handleDeleteNode(node)}
           onCopy={(node) => useFileTreeUi.getState().setClipboardNode(node)}
+          onCopyRelativePath={(node) => handleCopyRelativePath(node)}
           onPaste={(node) => void handlePasteInto(node)}
           canPaste={hasClipboard}
         />

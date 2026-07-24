@@ -1,0 +1,99 @@
+.dock-panel {
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--panel-bg);
+  min-width: 0;
+  min-height: 0;
+}
+
+.dock-panel-bottom {
+  border-top: 1px solid var(--border-color);
+}
+
+.dock-panel-top {
+  border-bottom: 1px solid var(--border-color);
+}
+
+.dock-panel-left {
+  border-right: 1px solid var(--border-color);
+}
+
+.dock-panel-right {
+  border-left: 1px solid var(--border-color);
+}
+
+.dock-panel-tabs {
+  display: flex;
+  gap: 4px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+
+.dock-panel-tabs button {
+  padding: 4px 10px;
+  font-size: 12px;
+  background: none;
+  border: none;
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  color: inherit;
+  cursor: grab;
+  opacity: 0.7;
+}
+
+.dock-panel-tabs button:active {
+  cursor: grabbing;
+}
+
+.dock-panel-tabs button.active {
+  opacity: 1;
+  background: var(--editor-bg);
+  font-weight: 600;
+}
+
+.dock-panel-body {
+  flex: 1;
+  min-height: 0;
+  min-width: 0;
+  position: relative;
+}
+
+.dock-panel-tab-content {
+  position: absolute;
+  inset: 0;
+}
+
+/* Two panels sharing one zone's footprint side by side instead of as
+ * tabs — see dockStore.splitPanel(). Each pane is its own mini dock-panel
+ * (own tab strip + body) so it keeps its own drag handle to pull back out. */
+.dock-panel-split {
+  flex-direction: row;
+}
+
+.dock-panel-split.dock-panel-split-column {
+  flex-direction: column;
+}
+
+.dock-panel-split-pane {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.dock-panel-split-divider {
+  flex-shrink: 0;
+  background: var(--border-color);
+}
+
+.dock-panel-split-divider-row {
+  width: 4px;
+  cursor: col-resize;
+}
+
+.dock-panel-split-divider-column {
+  height: 4px;
+  cursor: row-resize;
+}

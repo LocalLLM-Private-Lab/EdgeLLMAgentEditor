@@ -111,6 +111,43 @@ export function TerminalPanel() {
     term.open(container);
     fit.fit();
 
+    async function pasteFromClipboard() {
+      const text = await navigator.clipboard.readText();
+      if (!text) return;
+      send({ type: 'stdin', session_id: id, data: bytesToBase64(new TextEncoder().encode(text)) });
+    }
+
+    // VS Code's own terminal default on Windows: Ctrl+C copies the current
+    // selection if there is one, otherwise it falls through to xterm's
+    // normal behavior (sends \x03 / SIGINT to the PTY). Ctrl+V has no
+    // default xterm binding at all, so it's added outright.
+    term.attachCustomKeyEventHandler((e) => {
+      if (e.type !== 'keydown') return true;
+      const ctrlOrCmd = e.ctrlKey || e.metaKey;
+      if (ctrlOrCmd && !e.shiftKey && e.key.toLowerCase() === 'c' && term.hasSelection()) {
+        void navigator.clipboard.writeText(term.getSelection());
+        return false;
+      }
+      if (ctrlOrCmd && !e.shiftKey && e.key.toLowerCase() === 'v') {
+        void pasteFromClipboard();
+        return false;
+      }
+      return true;
+    });
+
+    // Right-click with nothing selected pastes; with a selection present,
+    // it copies instead (matches Windows Terminal/most terminal emulators'
+    // default). The browser's native menu is never shown here — always
+    // preventDefault, since this app supplies its own actions everywhere.
+    container.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      if (term.hasSelection()) {
+        void navigator.clipboard.writeText(term.getSelection());
+      } else {
+        void pasteFromClipboard();
+      }
+    });
+
     term.onData((data) => {
       send({
         type: 'stdin',

@@ -20,23 +20,33 @@ interface CreatingState {
 interface FileTreeUiState {
   creatingIn: CreatingState | null;
   renamingNodeId: string | null;
-  selectedNodeId: string | null;
+  selectedNodeIds: Set<string>;
   clipboardNode: FileTreeNode | null;
   setCreatingIn: (v: CreatingState | null) => void;
   setRenamingNodeId: (id: string | null) => void;
-  setSelectedNodeId: (id: string | null) => void;
   setClipboardNode: (node: FileTreeNode | null) => void;
+  /** Plain click — replaces the whole selection with just this one node. */
+  selectOnly: (id: string) => void;
+  /** Ctrl/Cmd+click — adds or removes this node from the selection without
+   * touching the rest, VS Code's Explorer multi-select convention. */
+  toggleSelected: (id: string) => void;
 }
 
-const useFileTreeUi = create<FileTreeUiState>((set) => ({
+const useFileTreeUi = create<FileTreeUiState>((set, get) => ({
   creatingIn: null,
   renamingNodeId: null,
-  selectedNodeId: null,
+  selectedNodeIds: new Set(),
   clipboardNode: null,
   setCreatingIn: (creatingIn) => set({ creatingIn }),
   setRenamingNodeId: (renamingNodeId) => set({ renamingNodeId }),
-  setSelectedNodeId: (selectedNodeId) => set({ selectedNodeId }),
   setClipboardNode: (clipboardNode) => set({ clipboardNode }),
+  selectOnly: (id) => set({ selectedNodeIds: new Set([id]) }),
+  toggleSelected: (id) => {
+    const next = new Set(get().selectedNodeIds);
+    if (next.has(id)) next.delete(id);
+    else next.add(id);
+    set({ selectedNodeIds: next });
+  },
 }));
 
 function creatingParentId(target: DirectoryTarget | null): string {
@@ -90,16 +100,26 @@ function handleCopyRelativePath(node: FileTreeNode) {
   void navigator.clipboard.writeText(node.pathSegments.join('/'));
 }
 
-async function handleDeleteNode(node: FileTreeNode) {
-  const kindLabel = node.kind === 'directory' ? 'フォルダ' : 'ファイル';
-  if (!window.confirm(`${kindLabel}「${node.name}」を削除しますか？この操作は取り消せません。`)) {
+async function handleDeleteNodes(nodes: FileTreeNode[]) {
+  if (nodes.length === 0) return;
+  const label =
+    nodes.length === 1
+      ? `${nodes[0].kind === 'directory' ? 'フォルダ' : 'ファイル'}「${nodes[0].name}」`
+      : `選択中の${nodes.length}件`;
+  if (!window.confirm(`${label}を削除しますか？この操作は取り消せません。`)) {
     return;
   }
   try {
-    await useWorkspaceStore.getState().deleteEntry(node);
+    for (const node of nodes) {
+      await useWorkspaceStore.getState().deleteEntry(node);
+    }
   } catch (err) {
     window.alert(`削除できませんでした: ${(err as Error).message}`);
   }
+}
+
+function handleDeleteNode(node: FileTreeNode) {
+  return handleDeleteNodes([node]);
 }
 
 /** Paste target: pasting "on" a directory (or the root/empty area, null)
@@ -127,7 +147,16 @@ function handleTreeNodeKeyDown(e: React.KeyboardEvent, node: FileTreeNode, isRen
     void handlePasteInto(node);
   } else if (e.key === 'Delete') {
     e.preventDefault();
-    void handleDeleteNode(node);
+    const { selectedNodeIds } = useFileTreeUi.getState();
+    if (selectedNodeIds.size > 1 && selectedNodeIds.has(node.id)) {
+      const tree = useWorkspaceStore.getState().tree;
+      const nodes = [...selectedNodeIds]
+        .map((id) => findNodeByPath(tree, id.split('/')))
+        .filter((n): n is FileTreeNode => n !== null);
+      void handleDeleteNodes(nodes);
+    } else {
+      void handleDeleteNode(node);
+    }
   } else if (e.key === 'F2') {
     e.preventDefault();
     useFileTreeUi.getState().setRenamingNodeId(node.id);
@@ -148,19 +177,35 @@ const TreeNode = memo(function TreeNode({
   const isExpanded = node.childrenLoaded === true;
 
   const isRenaming = useFileTreeUi((s) => s.renamingNodeId === node.id);
-  const isSelected = useFileTreeUi((s) => s.selectedNodeId === node.id);
+  const isSelected = useFileTreeUi((s) => s.selectedNodeIds.has(node.id));
   const creatingHere = useFileTreeUi(
     (s) => s.creatingIn && node.kind === 'directory' && creatingParentId(s.creatingIn.target) === node.id,
   );
   const creatingKind = useFileTreeUi((s) => s.creatingIn?.kind);
 
-  const handleClick = () => {
-    useFileTreeUi.getState().setSelectedNodeId(node.id);
+  const handleClick = (e: React.MouseEvent) => {
+    // Ctrl/Cmd+click only toggles this row in/out of the selection — VS
+    // Code's Explorer doesn't also open the file or expand the folder on
+    // that click, since it's a pure selection gesture.
+    if (e.ctrlKey || e.metaKey) {
+      useFileTreeUi.getState().toggleSelected(node.id);
+      return;
+    }
+    useFileTreeUi.getState().selectOnly(node.id);
     if (node.kind === 'directory') {
       void toggleExpand(node);
     } else {
-      void openFile(node);
+      // Single click opens as a preview (VS Code's Explorer behavior) —
+      // reuses the same tab slot on each subsequent single-click browse
+      // instead of piling up a new permanent tab per file.
+      void openFile(node, { preview: true });
     }
+  };
+
+  const handleDoubleClick = () => {
+    // Double click "really" opens it — pins the tab (or the existing
+    // preview tab for this same file) so it stops being replaceable.
+    if (node.kind === 'file') void openFile(node, { preview: false });
   };
 
   return (
@@ -170,7 +215,7 @@ const TreeNode = memo(function TreeNode({
         style={{ paddingLeft: `${depth * 14 + 8}px` }}
         tabIndex={0}
         onClick={isRenaming ? undefined : handleClick}
-        onFocus={() => useFileTreeUi.getState().setSelectedNodeId(node.id)}
+        onDoubleClick={isRenaming ? undefined : handleDoubleClick}
         onKeyDown={(e) => handleTreeNodeKeyDown(e, node, isRenaming)}
         onContextMenu={(e) => onContextMenu(e, node)}
       >

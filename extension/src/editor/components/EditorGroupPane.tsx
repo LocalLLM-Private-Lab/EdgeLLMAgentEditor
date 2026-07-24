@@ -24,6 +24,7 @@ function DraggableFileTab({
   fileId,
   name,
   isDirty,
+  isPreview,
   active,
   onClick,
   onClose,
@@ -32,6 +33,7 @@ function DraggableFileTab({
   fileId: string;
   name: string;
   isDirty: boolean;
+  isPreview: boolean;
   active: boolean;
   onClick: () => void;
   onClose: () => void;
@@ -41,6 +43,7 @@ function DraggableFileTab({
   const setPointerPosition = useEditorTabsStore((s) => s.setPointerPosition);
   const moveTabToGroup = useEditorTabsStore((s) => s.moveTabToGroup);
   const splitGroupWithTab = useEditorTabsStore((s) => s.splitGroupWithTab);
+  const pinTab = useEditorTabsStore((s) => s.pinTab);
   const pointerDownAt = useRef<{ x: number; y: number } | null>(null);
   const isDragging = useRef(false);
 
@@ -60,10 +63,11 @@ function DraggableFileTab({
 
   return (
     <div
-      className={`editor-tab ${active ? 'active' : ''}`}
+      className={`editor-tab ${active ? 'active' : ''} ${isPreview ? 'preview' : ''}`}
       data-file-id={fileId}
       style={{ touchAction: 'none' }}
       onClick={onClick}
+      onDoubleClick={() => pinTab(fileId)}
       onContextMenu={(e) => {
         e.preventDefault();
         e.stopPropagation();
@@ -71,6 +75,14 @@ function DraggableFileTab({
       }}
       onPointerDown={(e) => {
         if (e.button !== 0) return;
+        // Capturing the pointer here (on the tab, not the button) redirects
+        // the eventual mouseup/click to the tab itself — fine for starting
+        // a drag from most of the tab, but it means a press-and-release on
+        // the close button would never actually fire the button's own
+        // onClick, since the click ends up targeted at the tab instead.
+        // Skip capture entirely when the press starts on the close button
+        // so its plain click behaves normally.
+        if ((e.target as HTMLElement).closest('.editor-tab-close')) return;
         pointerDownAt.current = { x: e.clientX, y: e.clientY };
         e.currentTarget.setPointerCapture(e.pointerId);
       }}
@@ -138,6 +150,7 @@ export function EditorGroupPane({ groupId }: { groupId: string }) {
             fileId={tab.id}
             name={tab.name}
             isDirty={tab.isDirty}
+            isPreview={tab.isPreview}
             active={tab.id === activeFileId}
             onClick={() => setActiveFile(tab.id)}
             onClose={() => closeFile(tab.id)}

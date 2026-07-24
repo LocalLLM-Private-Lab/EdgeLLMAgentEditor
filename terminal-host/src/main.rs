@@ -56,6 +56,7 @@ async fn main() -> anyhow::Result<()> {
     let state = ws_server::AppState {
         config: cfg.clone(),
         expected_origin,
+        active_connections: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
     };
     let app = ws_server::build_router(state);
 
@@ -71,6 +72,8 @@ async fn main() -> anyhow::Result<()> {
     println!("  new terminals will open in: {cwd}");
     println!("  (this process's own launch directory — cd there yourself in the terminal");
     println!("   if that's not where you want to work, same as any other terminal app)");
+    println!();
+    println!("  exits itself shortly after the last connected client disconnects");
 
     axum::serve(listener, app).await?;
     Ok(())

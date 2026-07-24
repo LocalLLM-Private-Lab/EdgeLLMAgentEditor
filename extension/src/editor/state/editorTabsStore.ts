@@ -18,6 +18,12 @@ function eolSequence(eol: 'LF' | 'CRLF'): monaco.editor.EndOfLineSequence {
   return eol === 'CRLF' ? monaco.editor.EndOfLineSequence.CRLF : monaco.editor.EndOfLineSequence.LF;
 }
 
+/** Keyed by node.id (path) — de-dupes concurrent openFile() calls for the
+ * same file (see openFile's comment for why a real double-click needs
+ * this) so only one actual file-read/model-create ever runs per path at a
+ * time. */
+const pendingFileOpens = new Map<string, Promise<void>>();
+
 export interface EditorTab extends OpenFile {
   model: monaco.editor.ITextModel;
   /** Which editor group's tab strip this file currently belongs to — see
@@ -80,9 +86,20 @@ interface EditorTabsState {
    * reason to repeat that mistake here). Not persisted. */
   pointerPosition: { x: number; y: number } | null;
 
-  openFile: (node: FileTreeNode) => Promise<void>;
+  /** `preview: true` (Explorer single-click) opens in VS Code's preview
+   * slot — reuses/replaces whatever preview tab already exists in the
+   * target group instead of adding a new one, and gets pinned into a
+   * normal tab automatically on first edit or on a subsequent non-preview
+   * open of the same file. Every other caller (Quick Open, "apply to
+   * file", go-to-definition, ...) omits this and opens permanently, same
+   * as before this existed. */
+  openFile: (node: FileTreeNode, options?: { preview?: boolean }) => Promise<void>;
   closeFile: (id: string) => void;
   setActiveFile: (id: string) => void;
+  /** Pins an already-open preview tab (double-clicking it in the tab strip
+   * itself, mirroring the Explorer's double-click-to-pin) — a no-op for a
+   * tab that's already permanent. */
+  pinTab: (id: string) => void;
   goBack: () => void;
   goForward: () => void;
   saveFile: (id: string) => Promise<void>;
@@ -346,97 +363,159 @@ export const useEditorTabsStore = create<EditorTabsState>((set, get) => ({
   draggingTab: null,
   pointerPosition: null,
 
-  openFile: async (node: FileTreeNode) => {
+  openFile: async (node: FileTreeNode, options?: { preview?: boolean }) => {
     if (node.kind !== 'file') return;
+    const preview = options?.preview ?? false;
+
+    function focusExisting(existingId: string) {
+      set((state) => {
+        const focus = focusFileState(state, existingId);
+        const existingTab = state.openFiles.find((f) => f.id === existingId);
+        // A non-preview (e.g. double-click) open of an already-open
+        // preview tab pins it, same as VS Code — opening it again "for
+        // real" is exactly the signal that it shouldn't be replaceable
+        // anymore.
+        const openFiles =
+          !preview && existingTab?.isPreview
+            ? state.openFiles.map((f) => (f.id === existingId ? { ...f, isPreview: false } : f))
+            : state.openFiles;
+        // pushHistory returns the *whole* state unchanged (not just
+        // {navHistory, navIndex}) when the history already points at this
+        // id — spreading it after `openFiles` here would silently clobber
+        // the just-computed pin/no-pin update with that stale copy, so
+        // `openFiles` has to come last.
+        return { ...(focus ?? {}), ...pushHistory(state, existingId), openFiles };
+      });
+    }
+
     const existing = get().openFiles.find((f) => f.pathSegments.join('/') === node.id);
     if (existing) {
-      set((state) => {
-        const focus = focusFileState(state, existing.id);
-        return focus ? { ...focus, ...pushHistory(state, existing.id) } : state;
-      });
+      focusExisting(existing.id);
       return;
     }
 
-    // Captured up front (rather than re-read at the end) so the new tab
-    // lands in whichever group was focused when the user asked to open it,
-    // even though the group could theoretically change focus during the
-    // await below.
-    const groupId = get().focusedGroupId;
-
-    const fileHandle = node.handle as FileSystemFileHandle;
-    const [bytes, lastModified] = await Promise.all([
-      readFileBytes(fileHandle),
-      getFileLastModified(fileHandle),
-    ]);
-    const encoding = detectEncodingFromBytes(bytes);
-    const content = decodeBytes(bytes, encoding);
-    const eol = detectEol(content);
-    const language = languageFromFilename(node.name);
-    await ensureLanguageTokenization(language);
-    const id = uuid();
-    const modelUri = monaco.Uri.parse(`inmemory://workspace/${id}`);
-    const model = monaco.editor.createModel(content, language, modelUri);
-    // Monaco settles on whichever EOL is more frequent in the buffer by
-    // default — pin it to the detected one explicitly so a file that's
-    // (say) all-CRLF-but-one-stray-LF-line still round-trips consistently,
-    // and so getValue() on save reliably emits the original style.
-    model.setEOL(eolSequence(eol));
-
-    const tab: EditorTab = {
-      id,
-      name: node.name,
-      pathSegments: node.pathSegments,
-      fileHandle,
-      modelUri: modelUri.toString(),
-      isDirty: false,
-      language,
-      lastKnownDiskModified: lastModified,
-      encoding,
-      eol,
-      model,
-      groupId,
-    };
-
-    model.onDidChangeContent(() => {
-      const state = get();
-      const tabNow = state.openFiles.find((f) => f.id === id);
-      if (tabNow && !tabNow.isDirty) {
-        set({
-          openFiles: state.openFiles.map((f) => (f.id === id ? { ...f, isDirty: true } : f)),
-        });
-      }
-      if (isLspLanguage(language)) {
-        const rootUri = useLspStore.getState().rootUri;
-        if (rootUri) {
-          useLspStore.getState().notifyDidChange(pathSegmentsToUri(rootUri, node.pathSegments), language);
-        }
-      }
-    });
-
-    // Lazily starts (or reuses) the language-server session for supported
-    // languages, then sends textDocument/didOpen. Fire-and-forget keeps a
-    // missing external server from blocking file opening; the status bar
-    // surfaces the launch error.
-    if (isLspLanguage(language)) {
-      void (async () => {
-        try {
-          await useLspStore.getState().ensureSession(language);
-        } catch {
-          return;
-        }
-        const rootUri = useLspStore.getState().rootUri;
-        if (!rootUri) return;
-        useLspStore.getState().registerDocument(pathSegmentsToUri(rootUri, node.pathSegments), model, language);
-      })();
+    // A real double-click fires click, click, then dblclick in a burst —
+    // each of FileTree's handlers calls openFile for the very same file,
+    // and without de-duping they'd race: a later call's "already open?"
+    // check above can run before an earlier call's file read even
+    // resolves, so each would independently read the file and create its
+    // own model/tab. Collapsing concurrent opens of the same path into one
+    // actual load — with later callers just waiting for it, then applying
+    // their own preview/permanent intent on top — makes that race
+    // structurally impossible instead of papering over its symptoms.
+    const pending = pendingFileOpens.get(node.id);
+    if (pending) {
+      await pending;
+      const nowOpen = get().openFiles.find((f) => f.pathSegments.join('/') === node.id);
+      if (nowOpen) focusExisting(nowOpen.id);
+      return;
     }
 
-    set((state) => ({
-      openFiles: [...state.openFiles, tab],
-      groups: { ...state.groups, [groupId]: { ...state.groups[groupId], activeFileId: id } },
-      focusedGroupId: groupId,
-      activeFileId: id,
-      ...pushHistory(state, id),
-    }));
+    const loadPromise = (async () => {
+      // Captured up front (rather than re-read at the end) so the new tab
+      // lands in whichever group was focused when the user asked to open
+      // it, even though the group could theoretically change focus during
+      // the await below.
+      const groupId = get().focusedGroupId;
+
+      const fileHandle = node.handle as FileSystemFileHandle;
+      const [bytes, lastModified] = await Promise.all([
+        readFileBytes(fileHandle),
+        getFileLastModified(fileHandle),
+      ]);
+      const encoding = detectEncodingFromBytes(bytes);
+      const content = decodeBytes(bytes, encoding);
+      const eol = detectEol(content);
+      const language = languageFromFilename(node.name);
+      await ensureLanguageTokenization(language);
+      const id = uuid();
+      const modelUri = monaco.Uri.parse(`inmemory://workspace/${id}`);
+      const model = monaco.editor.createModel(content, language, modelUri);
+      // Monaco settles on whichever EOL is more frequent in the buffer by
+      // default — pin it to the detected one explicitly so a file that's
+      // (say) all-CRLF-but-one-stray-LF-line still round-trips consistently,
+      // and so getValue() on save reliably emits the original style.
+      model.setEOL(eolSequence(eol));
+
+      const tab: EditorTab = {
+        id,
+        name: node.name,
+        pathSegments: node.pathSegments,
+        fileHandle,
+        modelUri: modelUri.toString(),
+        isDirty: false,
+        language,
+        lastKnownDiskModified: lastModified,
+        encoding,
+        eol,
+        model,
+        groupId,
+        isPreview: preview,
+      };
+
+      model.onDidChangeContent(() => {
+        const state = get();
+        const tabNow = state.openFiles.find((f) => f.id === id);
+        // Editing a preview tab pins it too — same first-edit guard as
+        // isDirty (a preview tab always starts clean, so this only ever
+        // fires once), otherwise a preview tab you're actively typing into
+        // could still get silently replaced/disposed by browsing to
+        // another file in the Explorer.
+        if (tabNow && !tabNow.isDirty) {
+          set({
+            openFiles: state.openFiles.map((f) => (f.id === id ? { ...f, isDirty: true, isPreview: false } : f)),
+          });
+        }
+        if (isLspLanguage(language)) {
+          const rootUri = useLspStore.getState().rootUri;
+          if (rootUri) {
+            useLspStore.getState().notifyDidChange(pathSegmentsToUri(rootUri, node.pathSegments), language);
+          }
+        }
+      });
+
+      // Lazily starts (or reuses) the language-server session for
+      // supported languages, then sends textDocument/didOpen.
+      // Fire-and-forget keeps a missing external server from blocking
+      // file opening; the status bar surfaces the launch error.
+      if (isLspLanguage(language)) {
+        void (async () => {
+          try {
+            await useLspStore.getState().ensureSession(language);
+          } catch {
+            return;
+          }
+          const rootUri = useLspStore.getState().rootUri;
+          if (!rootUri) return;
+          useLspStore.getState().registerDocument(pathSegmentsToUri(rootUri, node.pathSegments), model, language);
+        })();
+      }
+
+      // A new preview open reuses/replaces whatever preview tab is
+      // already in this group instead of adding another one — browsing
+      // files in the Explorer shouldn't pile up tabs.
+      const existingPreviewTab = preview
+        ? get().openFiles.find((f) => f.groupId === groupId && f.isPreview)
+        : undefined;
+      if (existingPreviewTab) disposeAndUnregisterTabs([existingPreviewTab]);
+
+      set((state) => ({
+        openFiles: existingPreviewTab
+          ? state.openFiles.map((f) => (f.id === existingPreviewTab.id ? tab : f))
+          : [...state.openFiles, tab],
+        groups: { ...state.groups, [groupId]: { ...state.groups[groupId], activeFileId: id } },
+        focusedGroupId: groupId,
+        activeFileId: id,
+        ...pushHistory(state, id),
+      }));
+    })();
+
+    pendingFileOpens.set(node.id, loadPromise);
+    try {
+      await loadPromise;
+    } finally {
+      pendingFileOpens.delete(node.id);
+    }
   },
 
   closeFile: (id: string) => {
@@ -450,6 +529,11 @@ export const useEditorTabsStore = create<EditorTabsState>((set, get) => ({
       const focus = focusFileState(state, id);
       return focus ? { ...focus, ...pushHistory(state, id) } : state;
     }),
+
+  pinTab: (id: string) =>
+    set((state) => ({
+      openFiles: state.openFiles.map((f) => (f.id === id && f.isPreview ? { ...f, isPreview: false } : f)),
+    })),
 
   goBack: () => {
     const { navHistory, navIndex } = get();

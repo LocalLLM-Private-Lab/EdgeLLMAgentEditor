@@ -31,6 +31,12 @@
   border-bottom: 2px solid var(--accent-color);
 }
 
+/* VS Code's preview-tab convention — italic until pinned (edited, or
+ * opened "for real" via double-click). */
+.editor-tab.preview .editor-tab-name {
+  font-style: italic;
+}
+
 .editor-tab-close {
   background: none;
   border: none;

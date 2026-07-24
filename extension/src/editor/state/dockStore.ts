@@ -41,9 +41,14 @@ interface StoredLayout {
   splitRatio: Partial<Record<DockZone, number>>;
 }
 
+// Only used on a genuinely fresh install (load() falls back to this when
+// nothing has ever been persisted) — terminal starts visible so the app
+// opens ready to use rather than needing a trip to the 表示 menu first;
+// any later explicit hide is persisted and respected from then on, this
+// default never overrides an actual saved preference.
 const DEFAULT_LAYOUT: StoredLayout = {
   panels: {
-    terminal: { zone: 'bottom', visible: false },
+    terminal: { zone: 'bottom', visible: true },
     copilot: { zone: 'bottom', visible: false },
   },
   activeByZone: {},

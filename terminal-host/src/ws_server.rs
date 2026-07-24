@@ -31,8 +31,10 @@ pub fn build_router(state: AppState) -> Router {
         .with_state(state)
 }
 
+pub const HEALTH_RESPONSE: &str = "m365-copilot-editor-terminal-host";
+
 async fn health() -> &'static str {
-    "ok"
+    HEALTH_RESPONSE
 }
 
 async fn ws_handler(

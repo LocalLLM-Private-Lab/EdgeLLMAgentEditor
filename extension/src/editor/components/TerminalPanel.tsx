@@ -30,6 +30,7 @@ export function TerminalPanel() {
   const settings = useTerminalStore((s) => s.settings);
   const connectionState = useTerminalStore((s) => s.connectionState);
   const saveSettings = useTerminalStore((s) => s.saveSettings);
+  const connect = useTerminalStore((s) => s.connect);
   const send = useTerminalStore((s) => s.send);
   const subscribe = useTerminalStore((s) => s.subscribe);
 
@@ -46,17 +47,20 @@ export function TerminalPanel() {
   const [commandInput, setCommandInput] = useState('');
   const [launchMessage, setLaunchMessage] = useState<string | null>(null);
 
-  // The existing auto-reconnect loop in wsTerminalClient.ts retries every
-  // 2s regardless — this just gives the browser-launched terminal-host a
-  // moment to come up, and it gets picked up on the next retry with no
-  // extra wiring needed here.
+  // App.tsx already tries this once automatically on startup
+  // (ensureConnected) — this is the manual retry for when that didn't
+  // pan out (host not registered yet, was closed since, etc.). Saves the
+  // fresh port/token itself and connects immediately rather than just
+  // hoping wsTerminalClient's own reconnect loop happens to pick it up.
   async function handleLaunchHost() {
     setLaunchMessage('起動しています...');
     const result = await launchTerminalHostViaNativeMessaging();
-    if (result.status === 'started') {
-      setLaunchMessage('起動しました。接続を待っています...');
-    } else if (result.status === 'already_running') {
-      setLaunchMessage('既に起動しています。接続を待っています...');
+    if (result.status === 'started' || result.status === 'already_running') {
+      await saveSettings({ port: result.port, token: result.token });
+      connect();
+      setLaunchMessage(
+        result.status === 'started' ? '起動しました。接続しています...' : '既に起動しています。接続しています...',
+      );
     } else if (result.status === 'unavailable') {
       setLaunchMessage(
         '未登録です。terminal-host/install-native-messaging-host.bat を一度実行してください。',
@@ -69,9 +73,6 @@ export function TerminalPanel() {
       setLaunchMessage(`起動に失敗しました: ${result.message}`);
     }
   }
-
-  // loadSettings()/connect() run once at the App level (App.tsx) so the
-  // terminal host is already connected by the time this panel is opened.
 
   // Route incoming server messages to the matching session's xterm instance.
   useEffect(() => {
@@ -238,8 +239,12 @@ export function TerminalPanel() {
     return (
       <div className="terminal-panel">
         <div className="terminal-settings-form">
-          <p>
-            terminal-host (Rust) をプロジェクトフォルダ内から起動し、表示されたポートとトークンを入力してください。
+          <p>通常は拡張機能の起動時に自動でterminal-hostが立ち上がって接続します。まだの場合はこちらから起動できます。</p>
+          <button onClick={() => void handleLaunchHost()}>ターミナルホストを起動</button>
+          {launchMessage && <span className="terminal-launch-message">{launchMessage}</span>}
+          <p className="terminal-settings-fallback-hint">
+            自動起動が使えない場合(terminal-host/install-native-messaging-host.bat
+            未実行など): terminal-host (Rust) をプロジェクトフォルダ内から手動で起動し、表示されたポートとトークンを入力してください。
           </p>
           <label>
             ポート

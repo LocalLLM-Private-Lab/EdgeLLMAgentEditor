@@ -16,6 +16,9 @@ use std::net::TcpStream;
 use std::time::Duration;
 
 use crate::config;
+use crate::ws_server::HEALTH_RESPONSE;
+
+const STARTUP_TIMEOUT: Duration = Duration::from_secs(8);
 
 fn log(line: &str) {
     let path = std::env::temp_dir().join("terminal-host-native-messaging.log");
@@ -59,16 +62,39 @@ pub fn run() -> anyhow::Result<()> {
     result
 }
 
+// Mirrors lsp-host's native_messaging::handle_start — the extension needs
+// both the port AND the token in one round trip to connect without ever
+// showing the user a manual port/token form, and a freshly spawned process
+// needs a moment to actually bind its listener before that port is usable,
+// so "started" only returns once the health check confirms it's up (or the
+// startup timeout elapses).
 fn handle_start() -> serde_json::Value {
+    let cfg = match config::load_or_create() {
+        Ok(cfg) => cfg,
+        Err(err) => {
+            log(&format!("config::load_or_create() failed: {err}"));
+            return serde_json::json!({ "status": "error", "message": err.to_string() });
+        }
+    };
+
     if let Some(port) = find_listening_port() {
         log(&format!("already listening on port {port}"));
-        return serde_json::json!({ "status": "already_running", "port": port });
+        return serde_json::json!({ "status": "already_running", "port": port, "token": cfg.token });
     }
 
     match spawn_detached() {
         Ok(()) => {
             log("spawn_detached() succeeded");
-            serde_json::json!({ "status": "started" })
+            match wait_for_listening_port() {
+                Some(port) => {
+                    log(&format!("terminal-host is listening on port {port}"));
+                    serde_json::json!({ "status": "started", "port": port, "token": cfg.token })
+                }
+                None => serde_json::json!({
+                    "status": "error",
+                    "message": "terminal-hostは起動しましたが、loopbackポートのlistenを確認できませんでした"
+                }),
+            }
         }
         Err(err) => {
             log(&format!("spawn_detached() failed: {err}"));
@@ -77,13 +103,48 @@ fn handle_start() -> serde_json::Value {
     }
 }
 
+fn is_terminal_host_port(port: u16) -> bool {
+    let Ok(mut stream) =
+        TcpStream::connect_timeout(&([127, 0, 0, 1], port).into(), Duration::from_millis(200))
+    else {
+        return false;
+    };
+    let _ = stream.set_read_timeout(Some(Duration::from_millis(300)));
+    let _ = stream.set_write_timeout(Some(Duration::from_millis(300)));
+    if Write::write_all(
+        &mut stream,
+        b"GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+    )
+    .is_err()
+    {
+        return false;
+    }
+
+    let mut response = Vec::new();
+    if stream.read_to_end(&mut response).is_err() {
+        return false;
+    }
+    let response = String::from_utf8_lossy(&response);
+    response.starts_with("HTTP/1.1 200") && response.contains(HEALTH_RESPONSE)
+}
+
 fn find_listening_port() -> Option<u16> {
     std::iter::once(config::DEFAULT_PORT)
         .chain(config::PORT_FALLBACKS)
-        .find(|port| {
-            TcpStream::connect_timeout(&([127, 0, 0, 1], *port).into(), Duration::from_millis(200))
-                .is_ok()
-        })
+        .find(|port| is_terminal_host_port(*port))
+}
+
+fn wait_for_listening_port() -> Option<u16> {
+    let deadline = std::time::Instant::now() + STARTUP_TIMEOUT;
+    loop {
+        if let Some(port) = find_listening_port() {
+            return Some(port);
+        }
+        if std::time::Instant::now() >= deadline {
+            return None;
+        }
+        std::thread::sleep(Duration::from_millis(100));
+    }
 }
 
 #[cfg(windows)]

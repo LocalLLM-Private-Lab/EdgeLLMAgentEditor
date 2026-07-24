@@ -72,34 +72,48 @@
   gap: 1px;
 }
 
+/* Group labels (一般/Copilot) are plain non-interactive headings, distinct
+ * from clickable items by weight+size alone rather than text-transform —
+ * uppercase does nothing to Japanese labels, so relying on it made a
+ * Japanese group label ("一般") and a Japanese item below it look
+ * identically weighted while only English labels ("COPILOT") visually
+ * stood out. Items are also indented under their group, VS Code-style, so
+ * the heading/item relationship reads from layout, not just styling. */
 .settings-nav-group-label {
   font-weight: 700;
-  font-size: 12px;
-  text-transform: uppercase;
-  letter-spacing: 0.02em;
-  opacity: 0.75;
-  padding: 4px 10px 6px;
+  font-size: 14px;
+  padding: 8px 10px 4px;
+}
+
+/* Each group is its own wrapper div in the markup, so the label is always
+ * that wrapper's first child — target the nav's first wrapper specifically
+ * to only zero out the very first group's top padding. */
+.settings-nav > div:first-child > .settings-nav-group-label {
+  padding-top: 0;
 }
 
 .settings-nav-item {
   text-align: left;
-  padding: 6px 10px;
+  padding: 6px 10px 6px 20px;
   background: none;
   border: none;
   border-left: 2px solid transparent;
   color: inherit;
   cursor: pointer;
   font-size: 13px;
+  opacity: 0.85;
 }
 
 .settings-nav-item:hover {
   background: var(--row-hover-bg);
+  opacity: 1;
 }
 
 .settings-nav-item.active {
   background: var(--row-hover-bg);
   border-left-color: var(--accent-color);
   font-weight: 600;
+  opacity: 1;
 }
 
 .settings-nav-empty {
@@ -155,4 +169,15 @@
 
 .settings-reset-btn:hover {
   text-decoration: underline;
+}
+
+.settings-select {
+  padding: 4px 6px;
+  font-size: 13px;
+  background: var(--panel-bg);
+  color: inherit;
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  width: fit-content;
+  min-width: 160px;
 }

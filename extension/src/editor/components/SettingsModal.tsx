@@ -8,18 +8,29 @@ import {
 import { usePlanPromptTemplateStore } from '../state/planPromptTemplateStore';
 import { DEFAULT_PLAN_PROMPT_TEMPLATE, DEFAULT_STEP_PROMPT_TEMPLATE } from '../copilot/planPromptTemplates';
 import { useRunCommandStore, type RunCommandMap } from '../state/runCommandStore';
+import { useKeybindingStore, type KeybindingMode } from '../state/keybindingStore';
 import './DiffViewModal.css';
 import './PromptTemplateSettingsModal.css';
 import './RunCommandSettingsModal.css';
 import './SettingsModal.css';
 
-export type SettingsCategory = 'promptTemplates' | 'planTemplates' | 'runCommands';
+export type SettingsCategory = 'keybinding' | 'promptTemplates' | 'planTemplates' | 'runCommands';
 
 const CATEGORY_LABELS: Record<SettingsCategory, string> = {
+  keybinding: 'キーバインド',
   promptTemplates: '単発プロンプトテンプレート',
   planTemplates: '計画プロンプトテンプレート',
   runCommands: '拡張子ごとの実行コマンド',
 };
+
+// Grouped like VS Code's own nav (a bold group label over its category
+// buttons) — keybinding and the run-command mapping are editor/workspace-
+// wide preferences, not Copilot ones, so they sit under 一般; only the
+// prompt-template settings are actually Copilot-specific.
+const NAV_GROUPS: { label: string; items: SettingsCategory[] }[] = [
+  { label: '一般', items: ['keybinding', 'runCommands'] },
+  { label: 'Copilot', items: ['promptTemplates', 'planTemplates'] },
+];
 
 interface RunCommandRow {
   id: string;
@@ -35,10 +46,6 @@ function runCommandRowsToMap(rows: RunCommandRow[]): RunCommandMap {
   }
   return map;
 }
-const NAV_ITEMS = (Object.keys(CATEGORY_LABELS) as SettingsCategory[]).map((id) => ({
-  id,
-  label: CATEGORY_LABELS[id],
-}));
 
 const AUTO_SAVE_DEBOUNCE_MS = 500;
 
@@ -112,6 +119,9 @@ export function SettingsModal({ initialCategory, onClose }: { initialCategory: S
   });
   const runCommandsSave = useDebouncedSave(saveRunCommandsToStore);
 
+  const keybindingMode = useKeybindingStore((s) => s.mode);
+  const setKeybindingMode = useKeybindingStore((s) => s.setMode);
+
   function handleClose() {
     promptSave.flush();
     planSave.flush();
@@ -143,10 +153,16 @@ export function SettingsModal({ initialCategory, onClose }: { initialCategory: S
     }
   }
 
-  const filteredNavItems = searchLower ? NAV_ITEMS.filter((item) => item.label.toLowerCase().includes(searchLower)) : NAV_ITEMS;
+  const visibleNavGroups = searchLower
+    ? NAV_GROUPS.map((g) => ({
+        ...g,
+        items: g.items.filter((id) => CATEGORY_LABELS[id].toLowerCase().includes(searchLower)),
+      })).filter((g) => g.items.length > 0)
+    : NAV_GROUPS;
+  const visibleCategoryIds = visibleNavGroups.flatMap((g) => g.items);
   useEffect(() => {
-    if (filteredNavItems.length > 0 && !filteredNavItems.some((item) => item.id === category)) {
-      setCategory(filteredNavItems[0].id);
+    if (visibleCategoryIds.length > 0 && !visibleCategoryIds.includes(category)) {
+      setCategory(visibleCategoryIds[0]);
     }
     // Only re-run when the filtered set changes shape, not on every
     // unrelated render (category switches deliberately don't re-trigger
@@ -211,21 +227,40 @@ export function SettingsModal({ initialCategory, onClose }: { initialCategory: S
         </div>
         <div className="settings-modal-body">
           <div className="settings-nav">
-            <div className="settings-nav-group-label">Copilot</div>
-            {filteredNavItems.map((item) => (
-              <button
-                key={item.id}
-                className={`settings-nav-item ${category === item.id ? 'active' : ''}`}
-                onClick={() => setCategory(item.id)}
-              >
-                {item.label}
-              </button>
+            {visibleNavGroups.map((group) => (
+              <div key={group.label}>
+                <div className="settings-nav-group-label">{group.label}</div>
+                {group.items.map((id) => (
+                  <button
+                    key={id}
+                    className={`settings-nav-item ${category === id ? 'active' : ''}`}
+                    onClick={() => setCategory(id)}
+                  >
+                    {CATEGORY_LABELS[id]}
+                  </button>
+                ))}
+              </div>
             ))}
-            {filteredNavItems.length === 0 && (
+            {visibleNavGroups.length === 0 && (
               <div className="settings-nav-empty">一致する項目がありません</div>
             )}
           </div>
           <div className="settings-content">
+            <div className="prompt-template-body" style={{ display: category === 'keybinding' ? 'flex' : 'none' }}>
+              <div className="settings-row">
+                <div className="settings-row-label">キーバインド</div>
+                <p className="settings-row-description">エディタのキー操作方式を選択します。</p>
+                <select
+                  className="settings-select"
+                  value={keybindingMode}
+                  onChange={(e) => void setKeybindingMode(e.target.value as KeybindingMode)}
+                >
+                  <option value="default">デフォルト</option>
+                  <option value="vim">Vim</option>
+                  <option value="emacs">Emacs</option>
+                </select>
+              </div>
+            </div>
             <div className="prompt-template-split" style={{ display: category === 'promptTemplates' ? 'flex' : 'none' }}>
               <div className="prompt-template-list">
                 {visibleTemplates.map((t) => (

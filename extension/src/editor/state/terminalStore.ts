@@ -5,6 +5,7 @@ import {
 } from '../terminal/wsTerminalClient';
 import type { ClientMessage, ServerMessage } from '../terminal/terminalProtocol';
 import { getStoredValue, setStoredValue } from '../../shared/chromeStorage';
+import { launchTerminalHostViaNativeMessaging } from '../terminal/nativeLaunch';
 
 export interface TerminalHostSettings {
   port: number;
@@ -27,6 +28,14 @@ interface TerminalState {
   pendingRunRequest: string | null;
   loadSettings: () => Promise<void>;
   saveSettings: (settings: TerminalHostSettings) => Promise<void>;
+  /** Tries to auto-launch (or find the already-running) terminal-host via
+   * Native Messaging and connect with the port/token it hands back — no
+   * manual "start it yourself and paste the port/token" step, matching
+   * lsp-host's flow. Falls back to whatever settings were last saved
+   * manually if native messaging isn't available (host not registered
+   * yet, or a platform without one) — the manual form stays as a backstop,
+   * it just isn't the primary path anymore. */
+  ensureConnected: () => Promise<void>;
   connect: () => void;
   disconnect: () => void;
   send: (msg: ClientMessage) => void;
@@ -50,6 +59,17 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   saveSettings: async (settings: TerminalHostSettings) => {
     await setStoredValue(SETTINGS_STORAGE_KEY, settings);
     set({ settings });
+  },
+
+  ensureConnected: async () => {
+    const result = await launchTerminalHostViaNativeMessaging();
+    if (result.status === 'started' || result.status === 'already_running') {
+      await get().saveSettings({ port: result.port, token: result.token });
+      get().connect();
+      return;
+    }
+    await get().loadSettings();
+    if (get().settings) get().connect();
   },
 
   connect: () => {

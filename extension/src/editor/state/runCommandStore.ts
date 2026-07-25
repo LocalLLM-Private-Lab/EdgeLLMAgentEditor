@@ -19,6 +19,12 @@ const DEFAULT_RUN_COMMANDS: RunCommandMap = {
   rb: 'ruby {file}',
   php: 'php {file}',
   pl: 'perl {file}',
+  lua: 'lua {file}',
+  r: 'Rscript {file}',
+  jl: 'julia {file}',
+  bat: 'cmd /c {file}',
+  cmd: 'cmd /c {file}',
+  vbs: 'cscript //nologo {file}',
 };
 
 interface RunCommandState {

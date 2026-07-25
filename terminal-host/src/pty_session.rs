@@ -1,6 +1,7 @@
 use base64::{Engine as _, engine::general_purpose::STANDARD};
 use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use std::io::{Read, Write};
+use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::protocol::ServerMessage;
@@ -8,7 +9,10 @@ use crate::protocol::ServerMessage;
 pub struct PtySession {
     writer: Box<dyn Write + Send>,
     master: Box<dyn MasterPty + Send>,
-    child: Box<dyn Child + Send + Sync>,
+    // Shared with the reader thread, which calls `wait()` on it once it
+    // sees EOF so `Exited` can carry the process's real exit code instead
+    // of always reporting `None`.
+    child: Arc<Mutex<Box<dyn Child + Send + Sync>>>,
 }
 
 fn default_shell() -> String {
@@ -74,33 +78,57 @@ impl PtySession {
 
         let child = pair.slave.spawn_command(cmd)?;
         let pid = child.process_id().unwrap_or(0);
+        let child: Arc<Mutex<Box<dyn Child + Send + Sync>>> = Arc::new(Mutex::new(child));
 
         let mut reader = pair.master.try_clone_reader()?;
         let writer = pair.master.take_writer()?;
 
-        std::thread::spawn(move || {
-            let mut buf = [0u8; 4096];
-            loop {
-                match reader.read(&mut buf) {
-                    Ok(0) => break,
-                    Ok(n) => {
-                        let data = STANDARD.encode(&buf[..n]);
-                        if out_tx
-                            .send(ServerMessage::Stdout {
-                                session_id: session_id.clone(),
-                                data,
-                            })
-                            .is_err()
-                        {
-                            break;
+        // Reader thread: relays stdout only. On Windows, ConPTY's pipe does
+        // *not* EOF just because the child process exited — it stays open
+        // as long as the pseudo-console handle (held by `master`, kept
+        // alive in the session map) exists, so `read()` can block forever
+        // past the point the shell is already dead. Exit detection is
+        // handled entirely by the separate waiter thread below, which
+        // waits on the real OS process handle instead.
+        {
+            let out_tx = out_tx.clone();
+            let session_id = session_id.clone();
+            std::thread::spawn(move || {
+                let mut buf = [0u8; 4096];
+                loop {
+                    match reader.read(&mut buf) {
+                        Ok(0) => break,
+                        Ok(n) => {
+                            let data = STANDARD.encode(&buf[..n]);
+                            if out_tx
+                                .send(ServerMessage::Stdout {
+                                    session_id: session_id.clone(),
+                                    data,
+                                })
+                                .is_err()
+                            {
+                                break;
+                            }
                         }
+                        Err(_) => break,
                     }
-                    Err(_) => break,
                 }
-            }
+            });
+        }
+
+        // Waiter thread: the sole source of `Exited`. Blocks on the actual
+        // process handle (unaffected by the ConPTY pipe quirk above), so it
+        // reliably fires whether the shell exited on its own or was killed.
+        let waiter_child = Arc::clone(&child);
+        std::thread::spawn(move || {
+            let exit_code = waiter_child
+                .lock()
+                .ok()
+                .and_then(|mut child| child.wait().ok())
+                .map(|status| status.exit_code() as i32);
             let _ = out_tx.send(ServerMessage::Exited {
                 session_id: session_id.clone(),
-                exit_code: None,
+                exit_code,
             });
         });
 
@@ -131,7 +159,10 @@ impl PtySession {
     }
 
     pub fn kill(&mut self) -> anyhow::Result<()> {
-        self.child.kill()?;
+        self.child
+            .lock()
+            .map_err(|_| anyhow::anyhow!("child lock poisoned"))?
+            .kill()?;
         Ok(())
     }
 }

@@ -1,21 +1,54 @@
 import { useEffect, useRef, useState } from 'react';
-import { usePlanStore } from '../state/planStore';
+import { useEditPlanStore, useAnalysisPlanStore } from '../state/planStore';
 import { useWorkspaceStore } from '../state/workspaceStore';
 import { usePlanPromptTemplateStore } from '../state/planPromptTemplateStore';
+import { useRunCommandStore } from '../state/runCommandStore';
+import { useNamedCommandStore } from '../state/namedCommandStore';
+import { useDockStore } from '../state/dockStore';
 import { buildPlanPrompt } from '../copilot/planPromptTemplates';
-import { buildToolResultPrompt } from '../copilot/promptTemplates';
+import { buildToolResultPrompt, buildRunResultPrompt } from '../copilot/promptTemplates';
 import { buildRepoMap } from '../copilot/repoMap';
 import { resolveWorkspaceFiles } from '../copilot/resolveWorkspaceFile';
 import { readFileText } from '../fs/fsaWorkspace';
 import { parsePlanResponse, fallbackSingleStep } from '../copilot/planParser';
-import { detectNeedFilesRequest, detectGrepRequest, detectListFilesRequest } from '../copilot/responseControl';
+import { detectControlFlow } from '../copilot/responseControl';
 import { runGrepSearch, runListFiles } from '../copilot/localTools';
+import { resolveRunToolRequest, resolveNamedToolRequest, type RunToolResolution } from '../copilot/runToolResolver';
+import { runAndCapture } from '../copilot/runAndCapture';
 import { FileContextPicker } from './FileContextPicker';
 import { PlanStepCard, STATUS_LABEL } from './PlanStepCard';
+import { ToolRunConfirmation } from './ToolRunConfirmation';
 import './CopilotPanel.css';
 import './PlanPanel.css';
 
-export function PlanPanel() {
+interface PlanPanelProps {
+  /** From CopilotPanel's top-level 編集モード/解析モード tabs — applies
+   * uniformly to every step's prompt (see PlanStepCard), not just the plan
+   * itself, so there's no separate per-step checkbox to remember. Also
+   * picks which independent plan "slot" this instance reads/writes (see
+   * planStore.ts) — CopilotPanel mounts one PlanPanel per mode, so an
+   * in-progress editing plan and an in-progress analysis plan never share
+   * state. */
+  analysisOnly: boolean;
+  /** CopilotPanel keeps both modes' PlanPanel mounted at once (so neither
+   * loses state when the mode tab is switched) and toggles this instead of
+   * conditionally rendering — same reasoning as DockPanel's tab-content
+   * panels. */
+  visible: boolean;
+}
+
+export function PlanPanel({ analysisOnly, visible }: PlanPanelProps) {
+  const usePlanStore = analysisOnly ? useAnalysisPlanStore : useEditPlanStore;
+  // Two mounted instances (edit/analysis) would otherwise collide on these
+  // two fixed-string ids — used both as the actual DOM id and as the
+  // scroll-spy/outline "current location" value throughout this
+  // component — so every occurrence below is suffixed per instance. Step
+  // ids don't need this: each plan's own steps carry their own UUIDs,
+  // already unique across both slots.
+  const scope = analysisOnly ? 'analysis' : 'edit';
+  const goalSectionId = `plan-section-goal-${scope}`;
+  const importSectionId = `plan-section-import-${scope}`;
+
   const rootHandle = useWorkspaceStore((s) => s.rootHandle);
   const planTemplate = usePlanPromptTemplateStore((s) => s.planTemplate);
 
@@ -41,10 +74,15 @@ export function PlanPanel() {
   const [planResponseText, setPlanResponseText] = useState('');
   const [status, setStatus] = useState<string | null>(null);
 
+  const runCommands = useRunCommandStore((s) => s.commands);
+  const namedCommands = useNamedCommandStore((s) => s.commands);
+  const [pendingToolRun, setPendingToolRun] = useState<{ path: string; command: string } | null>(null);
+  const [runningToolRun, setRunningToolRun] = useState(false);
+
   // Element id (matches the id= on each section/card below) of whichever
   // part of the plan is "current" — drives the outline's highlight and,
   // in focus mode, which single section is actually rendered.
-  const [currentLocation, setCurrentLocation] = useState('plan-section-goal');
+  const [currentLocation, setCurrentLocation] = useState(goalSectionId);
   const [focusMode, setFocusMode] = useState(false);
   const bodyRef = useRef<HTMLDivElement | null>(null);
 
@@ -137,48 +175,77 @@ export function PlanPanel() {
     }
   }
 
-  function handleParsePlan() {
+  async function handleParsePlan() {
     if (!planResponseText.trim()) return;
-    const needFiles = detectNeedFilesRequest(planResponseText);
-    if (needFiles) {
-      const merged = [...new Set([...contextFiles, ...needFiles])];
-      addContextFiles(needFiles);
+    const flow = detectControlFlow(planResponseText);
+
+    if (flow.kind === 'needFiles') {
+      const merged = [...new Set([...contextFiles, ...flow.paths])];
+      addContextFiles(flow.paths);
       setJustCopiedPlan(false);
       setPlanResponseText('');
       setStatus('Copilotの要求に応じてファイルを追加中...');
       void copyPlanPromptWithFiles(merged).then(() => {
         setJustCopiedPlan(true);
-        setStatus(`Copilotの要求により以下のファイルをコンテキストに追加しました: ${needFiles.join(', ')}`);
+        setStatus(`Copilotの要求により以下のファイルをコンテキストに追加しました: ${flow.paths.join(', ')}`);
       });
       return;
     }
 
-    if (rootHandle) {
-      const grepPattern = detectGrepRequest(planResponseText);
-      if (grepPattern) {
-        setJustCopiedPlan(false);
-        setPlanResponseText('');
-        setStatus(`「${grepPattern}」を検索中...`);
-        void runGrepSearch(rootHandle, grepPattern).then(async (result) => {
-          await navigator.clipboard.writeText(buildToolResultPrompt('検索(grep)', grepPattern, result));
-          setJustCopiedPlan(true);
-          setStatus('検索結果を踏まえたプロンプトをコピーしました。');
-        });
-        return;
-      }
+    if (flow.kind === 'grep' && rootHandle) {
+      setJustCopiedPlan(false);
+      setPlanResponseText('');
+      setStatus(`「${flow.pattern}」を検索中...`);
+      void runGrepSearch(rootHandle, flow.pattern).then(async (result) => {
+        await navigator.clipboard.writeText(buildToolResultPrompt('検索(grep)', flow.pattern, result));
+        setJustCopiedPlan(true);
+        setStatus('検索結果を踏まえたプロンプトをコピーしました。');
+      });
+      return;
+    }
 
-      const listQuery = detectListFilesRequest(planResponseText);
-      if (listQuery !== null) {
-        setJustCopiedPlan(false);
-        setPlanResponseText('');
-        setStatus('ファイル一覧を取得中...');
-        void runListFiles(rootHandle, listQuery).then(async (result) => {
-          await navigator.clipboard.writeText(buildToolResultPrompt('ファイル一覧', listQuery, result));
-          setJustCopiedPlan(true);
-          setStatus('ファイル一覧を踏まえたプロンプトをコピーしました。');
-        });
+    if (flow.kind === 'listFiles' && rootHandle) {
+      setJustCopiedPlan(false);
+      setPlanResponseText('');
+      setStatus('ファイル一覧を取得中...');
+      void runListFiles(rootHandle, flow.query).then(async (result) => {
+        await navigator.clipboard.writeText(buildToolResultPrompt('ファイル一覧', flow.query, result));
+        setJustCopiedPlan(true);
+        setStatus('ファイル一覧を踏まえたプロンプトをコピーしました。');
+      });
+      return;
+    }
+
+    if (flow.kind === 'runTool' && rootHandle) {
+      setJustCopiedPlan(false);
+      setPlanResponseText('');
+      setStatus(`「${flow.path}」の実行可否を確認中...`);
+      const resolution: RunToolResolution = await resolveRunToolRequest(rootHandle, flow.path, runCommands);
+      if (!resolution.ok) {
+        await navigator.clipboard.writeText(buildToolResultPrompt('実行リクエスト', resolution.path, resolution.message));
+        setJustCopiedPlan(true);
+        setStatus('実行できなかった旨を踏まえたプロンプトをコピーしました。');
         return;
       }
+      setPendingToolRun({ path: resolution.path, command: resolution.command });
+      setStatus(null);
+      return;
+    }
+
+    if (flow.kind === 'runToolNamed') {
+      setJustCopiedPlan(false);
+      setPlanResponseText('');
+      setStatus(`「${flow.name}」の実行可否を確認中...`);
+      const resolution: RunToolResolution = resolveNamedToolRequest(flow.name, namedCommands);
+      if (!resolution.ok) {
+        await navigator.clipboard.writeText(buildToolResultPrompt('実行リクエスト', resolution.path, resolution.message));
+        setJustCopiedPlan(true);
+        setStatus('実行できなかった旨を踏まえたプロンプトをコピーしました。');
+        return;
+      }
+      setPendingToolRun({ path: resolution.path, command: resolution.command });
+      setStatus(null);
+      return;
     }
 
     const parsed = parsePlanResponse(planResponseText);
@@ -193,6 +260,27 @@ export function PlanPanel() {
     }
     setJustCopiedPlan(false);
     setPlanResponseText('');
+  }
+
+  async function handleConfirmToolRun() {
+    if (!pendingToolRun) return;
+    setRunningToolRun(true);
+    useDockStore.getState().setVisible('terminal', true);
+    const result = await runAndCapture(pendingToolRun.command, `実行: ${pendingToolRun.path}`);
+    setRunningToolRun(false);
+    setPendingToolRun(null);
+    await navigator.clipboard.writeText(buildRunResultPrompt(result.command, result.exitCode, result.output));
+    setJustCopiedPlan(true);
+    setStatus(
+      result.exitCode === 0
+        ? '実行が成功しました。結果を踏まえたプロンプトをコピーしました。'
+        : `終了コード ${result.exitCode ?? '不明'} でした。結果を踏まえたプロンプトをコピーしました。`,
+    );
+  }
+
+  function handleRejectToolRun() {
+    setPendingToolRun(null);
+    setStatus('実行をキャンセルしました。');
   }
 
   // Clicking the already-focused step's header collapses it (accordion
@@ -239,24 +327,29 @@ export function PlanPanel() {
 
   // Completing the focused step moves focus to the next not-yet-done one,
   // so attention naturally follows the remaining work instead of staying
-  // on a step that's already finished.
+  // on a step that's already finished. Goes through jumpToStep (not a bare
+  // setActiveStepId) so currentLocation moves too — in focus mode that's
+  // what actually decides which single step is shown; leaving it behind
+  // meant completing a step in focus mode left the (now-collapsed,
+  // finished) step on screen instead of advancing to the next one.
   function handleStepStatusChange(stepId: string, status: (typeof steps)[number]['status']) {
     setStepStatus(stepId, status);
     if (status === 'done' && activeStepId === stepId) {
       const next = steps.find((s) => s.id !== stepId && s.status !== 'done');
-      setActiveStepId(next ? next.id : null);
+      if (next) jumpToStep(next.id);
+      else setActiveStepId(null);
     }
   }
 
   if (!loaded) return null;
 
   const doneCount = steps.filter((s) => s.status === 'done').length;
-  const showGoalSection = !focusMode || currentLocation === 'plan-section-goal';
-  const showImportSection = !focusMode || currentLocation === 'plan-section-import';
+  const showGoalSection = !focusMode || currentLocation === goalSectionId;
+  const showImportSection = !focusMode || currentLocation === importSectionId;
   const visibleSteps = focusMode ? steps.filter((s) => `plan-step-${s.id}` === currentLocation) : steps;
 
   return (
-    <div className="plan-panel">
+    <div className="plan-panel" style={visible ? undefined : { display: 'none' }}>
       <div className="plan-outline">
         <button
           className={`plan-outline-toggle ${focusMode ? 'active' : ''}`}
@@ -266,15 +359,15 @@ export function PlanPanel() {
           {focusMode ? '☰' : '◱'}
         </button>
         <button
-          className={`plan-outline-item ${currentLocation === 'plan-section-goal' ? 'active' : ''}`}
-          onClick={() => goToLocation('plan-section-goal')}
+          className={`plan-outline-item ${currentLocation === goalSectionId ? 'active' : ''}`}
+          onClick={() => goToLocation(goalSectionId)}
           title="① 計画を作成"
         >
           1
         </button>
         <button
-          className={`plan-outline-item ${currentLocation === 'plan-section-import' ? 'active' : ''}`}
-          onClick={() => goToLocation('plan-section-import')}
+          className={`plan-outline-item ${currentLocation === importSectionId ? 'active' : ''}`}
+          onClick={() => goToLocation(importSectionId)}
           title="② Copilotの回答を貼り付け"
         >
           2
@@ -316,7 +409,7 @@ export function PlanPanel() {
       )}
 
       {showGoalSection && (
-      <div className="copilot-section" id="plan-section-goal">
+      <div className="copilot-section" id={goalSectionId}>
         <div className="copilot-section-title">① 計画を作成</div>
         <div className="copilot-hint">
           複数ファイルにまたがる目標を入力してください。関連するファイルをコンテキストに追加すると、より的確な計画になります。
@@ -360,7 +453,7 @@ export function PlanPanel() {
       )}
 
       {showImportSection && (
-      <div className="copilot-section" id="plan-section-import">
+      <div className="copilot-section" id={importSectionId}>
         <div className="copilot-section-title">② Copilotの回答を貼り付け</div>
         <div className="copilot-hint">
           計画のJSONだけでなく、Copilotが追加ファイルや検索を求めてきた場合の回答も、種類を問わずすべてここに貼り付けてください。内容を見て自動で判別します。
@@ -372,11 +465,21 @@ export function PlanPanel() {
           onChange={(e) => setPlanResponseText(e.target.value)}
         />
         <div className="copilot-actions">
-          <button className="primary" disabled={!planResponseText.trim()} onClick={handleParsePlan}>
+          <button className="primary" disabled={!planResponseText.trim()} onClick={() => void handleParsePlan()}>
             回答を解析
           </button>
         </div>
       </div>
+      )}
+
+      {pendingToolRun && (
+        <ToolRunConfirmation
+          path={pendingToolRun.path}
+          command={pendingToolRun.command}
+          running={runningToolRun}
+          onConfirm={() => void handleConfirmToolRun()}
+          onReject={handleRejectToolRun}
+        />
       )}
 
       {status && <div className="copilot-status">{status}</div>}
@@ -403,6 +506,7 @@ export function PlanPanel() {
                 allSteps={steps}
                 goal={goal}
                 rootHandle={rootHandle}
+                analysisOnly={analysisOnly}
                 isActive={step.id === activeStepId}
                 onFocus={() => handleToggleStep(step.id)}
                 onStatusChange={(s) => handleStepStatusChange(step.id, s)}

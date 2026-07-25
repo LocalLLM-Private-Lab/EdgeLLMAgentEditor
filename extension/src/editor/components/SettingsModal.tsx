@@ -8,27 +8,34 @@ import {
 import { usePlanPromptTemplateStore } from '../state/planPromptTemplateStore';
 import { DEFAULT_PLAN_PROMPT_TEMPLATE, DEFAULT_STEP_PROMPT_TEMPLATE } from '../copilot/planPromptTemplates';
 import { useRunCommandStore, type RunCommandMap } from '../state/runCommandStore';
+import { useNamedCommandStore, type NamedCommandMap } from '../state/namedCommandStore';
 import { useKeybindingStore, type KeybindingMode } from '../state/keybindingStore';
 import './DiffViewModal.css';
 import './PromptTemplateSettingsModal.css';
 import './RunCommandSettingsModal.css';
 import './SettingsModal.css';
 
-export type SettingsCategory = 'keybinding' | 'promptTemplates' | 'planTemplates' | 'runCommands';
+export type SettingsCategory =
+  | 'keybinding'
+  | 'promptTemplates'
+  | 'planTemplates'
+  | 'runCommands'
+  | 'namedCommands';
 
 const CATEGORY_LABELS: Record<SettingsCategory, string> = {
   keybinding: 'キーバインド',
   promptTemplates: '単発プロンプトテンプレート',
   planTemplates: '計画プロンプトテンプレート',
   runCommands: '拡張子ごとの実行コマンド',
+  namedCommands: '名前付きコマンド',
 };
 
 // Grouped like VS Code's own nav (a bold group label over its category
-// buttons) — keybinding and the run-command mapping are editor/workspace-
+// buttons) — keybinding and the run-command mappings are editor/workspace-
 // wide preferences, not Copilot ones, so they sit under 一般; only the
 // prompt-template settings are actually Copilot-specific.
 const NAV_GROUPS: { label: string; items: SettingsCategory[] }[] = [
-  { label: '一般', items: ['keybinding', 'runCommands'] },
+  { label: '一般', items: ['keybinding', 'runCommands', 'namedCommands'] },
   { label: 'Copilot', items: ['promptTemplates', 'planTemplates'] },
 ];
 
@@ -43,6 +50,21 @@ function runCommandRowsToMap(rows: RunCommandRow[]): RunCommandMap {
   for (const row of rows) {
     const ext = row.ext.trim().replace(/^\./, '').toLowerCase();
     if (ext && row.command.trim()) map[ext] = row.command.trim();
+  }
+  return map;
+}
+
+interface NamedCommandRow {
+  id: string;
+  name: string;
+  command: string;
+}
+
+function namedCommandRowsToMap(rows: NamedCommandRow[]): NamedCommandMap {
+  const map: NamedCommandMap = {};
+  for (const row of rows) {
+    const name = row.name.trim();
+    if (name && row.command.trim()) map[name] = row.command.trim();
   }
   return map;
 }
@@ -119,6 +141,14 @@ export function SettingsModal({ initialCategory, onClose }: { initialCategory: S
   });
   const runCommandsSave = useDebouncedSave(saveRunCommandsToStore);
 
+  const namedCommands = useNamedCommandStore((s) => s.commands);
+  const saveNamedCommandsToStore = useNamedCommandStore((s) => s.saveCommands);
+  const [namedCommandRows, setNamedCommandRows] = useState<NamedCommandRow[]>(() => {
+    const initial = Object.entries(namedCommands).map(([name, command]) => ({ id: uuid(), name, command }));
+    return initial.length > 0 ? initial : [{ id: uuid(), name: '', command: '' }];
+  });
+  const namedCommandsSave = useDebouncedSave(saveNamedCommandsToStore);
+
   const keybindingMode = useKeybindingStore((s) => s.mode);
   const setKeybindingMode = useKeybindingStore((s) => s.setMode);
 
@@ -127,6 +157,7 @@ export function SettingsModal({ initialCategory, onClose }: { initialCategory: S
     planSave.flush();
     stepSave.flush();
     runCommandsSave.flush();
+    namedCommandsSave.flush();
     onClose();
   }
 
@@ -144,6 +175,22 @@ export function SettingsModal({ initialCategory, onClose }: { initialCategory: S
     const next = runCommandRows.filter((r) => r.id !== id);
     setRunCommandRows(next);
     runCommandsSave.now(runCommandRowsToMap(next));
+  }
+
+  function addNamedCommandRow() {
+    setNamedCommandRows((prev) => [...prev, { id: uuid(), name: '', command: '' }]);
+  }
+
+  function updateNamedCommandRow(id: string, patch: Partial<NamedCommandRow>) {
+    const next = namedCommandRows.map((r) => (r.id === id ? { ...r, ...patch } : r));
+    setNamedCommandRows(next);
+    namedCommandsSave.schedule(namedCommandRowsToMap(next));
+  }
+
+  function removeNamedCommandRow(id: string) {
+    const next = namedCommandRows.filter((r) => r.id !== id);
+    setNamedCommandRows(next);
+    namedCommandsSave.now(namedCommandRowsToMap(next));
   }
 
   function handleSearchKeyDown(e: React.KeyboardEvent) {
@@ -394,6 +441,36 @@ export function SettingsModal({ initialCategory, onClose }: { initialCategory: S
                   </div>
                 ))}
                 <button className="prompt-template-add-btn" onClick={addRunCommandRow}>
+                  + 追加
+                </button>
+              </div>
+            </div>
+            <div className="prompt-template-body" style={{ display: category === 'namedCommands' ? 'flex' : 'none' }}>
+              <div className="settings-row">
+                <div className="settings-row-label">名前付きコマンド</div>
+                <p className="settings-row-description">
+                  特定のファイルに紐づかないプロジェクト単位のコマンド(テストの実行・git diffの確認など)を、名前を付けて登録しておけます。
+                  Copilotが `TOOL_RUN_NAMED: 名前` の形式で実行をリクエストした場合、ここで登録した名前と一致すればそのコマンドの実行を確認できます。
+                  例: 名前「test」/ コマンド「npm test」。
+                </p>
+                {namedCommandRows.map((row) => (
+                  <div key={row.id} className="run-settings-row">
+                    <input
+                      className="run-settings-ext-input"
+                      placeholder="名前 (例: test)"
+                      value={row.name}
+                      onChange={(e) => updateNamedCommandRow(row.id, { name: e.target.value })}
+                    />
+                    <input
+                      className="run-settings-command-input"
+                      placeholder="コマンド (例: npm test)"
+                      value={row.command}
+                      onChange={(e) => updateNamedCommandRow(row.id, { command: e.target.value })}
+                    />
+                    <button onClick={() => removeNamedCommandRow(row.id)}>削除</button>
+                  </div>
+                ))}
+                <button className="prompt-template-add-btn" onClick={addNamedCommandRow}>
                   + 追加
                 </button>
               </div>

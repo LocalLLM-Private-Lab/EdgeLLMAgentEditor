@@ -36,11 +36,18 @@ export function TerminalPanel() {
 
   const pendingRunRequest = useTerminalStore((s) => s.pendingRunRequest);
   const consumePendingRunRequest = useTerminalStore((s) => s.consumePendingRunRequest);
+  const pendingCaptureRun = useTerminalStore((s) => s.pendingCaptureRun);
+  const consumePendingCaptureRun = useTerminalStore((s) => s.consumePendingCaptureRun);
 
   const hostRef = useRef<HTMLDivElement | null>(null);
   const sessionsRef = useRef<Map<string, Session>>(new Map());
   const [sessionIds, setSessionIds] = useState<string[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  // Kept separate from sessionsRef (a plain ref, only used for DOM/xterm
+  // plumbing) since the tab strip needs a reactive value to actually
+  // re-render when a Copilot-triggered run's session gets a distinct label
+  // instead of the generic "ターミナル".
+  const [sessionLabels, setSessionLabels] = useState<Record<string, string>>({});
 
   const [portInput, setPortInput] = useState(String(DEFAULT_TERMINAL_HOST_PORT));
   const [tokenInput, setTokenInput] = useState('');
@@ -95,8 +102,9 @@ export function TerminalPanel() {
   // launch directory by default (see terminal-host/src/pty_session.rs).
   // Run it from inside your project folder and it just works there, with
   // no folder picker or path entry needed on this side.
-  function openSession(): string {
+  function openSession(label?: string): string {
     const id = uuid();
+    if (label) setSessionLabels((prev) => ({ ...prev, [id]: label }));
     if (!hostRef.current) return id;
     const container = document.createElement('div');
     container.className = 'terminal-session-container';
@@ -187,6 +195,25 @@ export function TerminalPanel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingRunRequest, connectionState]);
 
+  // Same one-shot pattern as pendingRunRequest, but for a Copilot-driven
+  // "run and capture the output" request (copilot/runAndCapture.ts) —
+  // always opens a *new* session rather than reusing whichever one is
+  // active, so the caller can correlate this run's stdout/exit code via a
+  // session id nothing else is typing into.
+  useEffect(() => {
+    if (!pendingCaptureRun || connectionState !== 'connected') return;
+    const req = consumePendingCaptureRun();
+    if (!req) return;
+    const sessionId = openSession(req.label);
+    req.onSessionOpened(sessionId);
+    send({
+      type: 'stdin',
+      session_id: sessionId,
+      data: bytesToBase64(new TextEncoder().encode(req.command + '\r')),
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingCaptureRun, connectionState]);
+
   useEffect(() => {
     if (connectionState === 'connected') setLaunchMessage(null);
   }, [connectionState]);
@@ -199,6 +226,12 @@ export function TerminalPanel() {
     sessionsRef.current.delete(id);
     setSessionIds((prev) => prev.filter((s) => s !== id));
     setActiveSessionId((prev) => (prev === id ? (sessionIds.find((s) => s !== id) ?? null) : prev));
+    setSessionLabels((prev) => {
+      if (!(id in prev)) return prev;
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
   }
 
   // Show only the active session's container; fit it so PTY size matches.
@@ -284,7 +317,7 @@ export function TerminalPanel() {
             className={`terminal-session-tab ${id === activeSessionId ? 'active' : ''}`}
             onClick={() => setActiveSessionId(id)}
           >
-            ターミナル
+            {sessionLabels[id] ?? 'ターミナル'}
             <button
               onClick={(e) => {
                 e.stopPropagation();

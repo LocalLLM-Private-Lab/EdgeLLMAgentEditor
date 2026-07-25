@@ -16,6 +16,47 @@
   flex-shrink: 0;
 }
 
+/* Excel-sheet-tab look for the top-level 編集モード/解析モード switch —
+ * deliberately different from .copilot-subtabs below it (which stays a
+ * flat tab row) so the two are legible as separate, independently
+ * combinable axes rather than one flat 4-item tab list. The row draws a
+ * "shelf" border-bottom across the whole strip; every button sits above
+ * it as a raised, fully-outlined tag, except the active one, which erases
+ * its segment of that line (matching background + negative margin) so it
+ * reads as physically connected to the panel content beneath it — the
+ * other tab stays a separate sticky-note shape behind it. */
+.copilot-mode-tabs {
+  display: flex;
+  gap: 4px;
+  flex-shrink: 0;
+  border-bottom: 1px solid var(--border-color);
+}
+
+.copilot-mode-tabs button {
+  font-family: inherit;
+  font-size: 12px;
+  padding: 5px 14px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  background: var(--row-hover-bg);
+  color: var(--text-color);
+  opacity: 0.65;
+  cursor: pointer;
+}
+
+.copilot-mode-tabs button:hover:not(.active) {
+  opacity: 0.9;
+}
+
+.copilot-mode-tabs button.active {
+  opacity: 1;
+  font-weight: 600;
+  background: var(--panel-bg);
+  border-color: var(--border-color);
+  border-bottom: 1px solid var(--panel-bg);
+  margin-bottom: -1px;
+}
+
 .copilot-subtabs button {
   padding: 4px 10px;
   font-size: 12px;
@@ -196,6 +237,20 @@
   font-size: 11px;
 }
 
+/* Read-only display for an analysis-only response — no target-path input
+ * or apply button, since there's nothing to apply. */
+.copilot-analysis-text {
+  max-height: 400px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  background: var(--panel-bg);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  padding: 8px;
+  font-size: 12px;
+  margin: 0;
+}
+
 .copilot-block-card {
   border: 1px solid var(--border-color);
   border-radius: var(--radius-sm);
@@ -288,6 +343,21 @@
 .copilot-plan-revision .copilot-flow-hint {
   color: var(--warning-fg);
   text-decoration: underline;
+}
+
+.copilot-tool-run-confirm {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: var(--warning-bg);
+  border: 1px solid var(--warning-border);
+  border-radius: var(--radius-sm);
+  padding: 8px;
+  color: var(--warning-fg);
+}
+
+.copilot-tool-run-confirm code {
+  font-size: 11px;
 }
 
 .copilot-plan-revision-note {

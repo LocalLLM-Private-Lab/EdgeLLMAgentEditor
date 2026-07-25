@@ -1,18 +1,18 @@
 import { useState } from 'react';
 import type { PlanStep } from '../copilot/planParser';
 import { usePlanPromptTemplateStore } from '../state/planPromptTemplateStore';
+import { useRunCommandStore } from '../state/runCommandStore';
+import { useNamedCommandStore } from '../state/namedCommandStore';
+import { useDockStore } from '../state/dockStore';
 import { buildStepPrompt, buildPlanRevisionPrompt } from '../copilot/planPromptTemplates';
-import { buildToolResultPrompt } from '../copilot/promptTemplates';
+import { buildToolResultPrompt, buildRunResultPrompt } from '../copilot/promptTemplates';
 import { resolveWorkspaceFiles } from '../copilot/resolveWorkspaceFile';
 import { readFileText } from '../fs/fsaWorkspace';
 import { extractCodeBlocks, type ExtractedCodeBlock } from '../copilot/codeBlockParser';
-import {
-  detectNeedFilesRequest,
-  detectPlanRevisionRequest,
-  detectGrepRequest,
-  detectListFilesRequest,
-} from '../copilot/responseControl';
+import { detectControlFlow } from '../copilot/responseControl';
 import { runGrepSearch, runListFiles } from '../copilot/localTools';
+import { resolveRunToolRequest, resolveNamedToolRequest, type RunToolResolution } from '../copilot/runToolResolver';
+import { runAndCapture } from '../copilot/runAndCapture';
 import {
   prepareApplyToTreeNode,
   prepareApplyForNewFile,
@@ -20,6 +20,7 @@ import {
 } from '../copilot/applyToFileFlow';
 import { FileContextPicker } from './FileContextPicker';
 import { DiffViewModal } from './DiffViewModal';
+import { ToolRunConfirmation } from './ToolRunConfirmation';
 import './CopilotPanel.css';
 import './PlanStepCard.css';
 
@@ -41,6 +42,10 @@ interface PlanStepCardProps {
   allSteps: PlanStep[];
   goal: string;
   rootHandle: FileSystemDirectoryHandle | null;
+  /** From CopilotPanel's top-level 編集モード/解析モード tabs, threaded
+   * through PlanPanel — applies uniformly to every step, no per-step
+   * checkbox to remember to (un)check. */
+  analysisOnly: boolean;
   isActive: boolean;
   onFocus: () => void;
   onStatusChange: (status: PlanStep['status']) => void;
@@ -53,12 +58,15 @@ export function PlanStepCard({
   allSteps,
   goal,
   rootHandle,
+  analysisOnly,
   isActive,
   onFocus,
   onStatusChange,
   onFilesChange,
 }: PlanStepCardProps) {
   const stepTemplate = usePlanPromptTemplateStore((s) => s.stepTemplate);
+  const runCommands = useRunCommandStore((s) => s.commands);
+  const namedCommands = useNamedCommandStore((s) => s.commands);
   // Accordion: only the focused step stays expanded, everything else
   // collapses — driven entirely by isActive, not local state, so switching
   // focus elsewhere always collapses this card.
@@ -74,6 +82,9 @@ export function PlanStepCard({
   const [planRevisionNote, setPlanRevisionNote] = useState<string | null>(null);
   const [copyingRevision, setCopyingRevision] = useState(false);
   const [justCopiedRevision, setJustCopiedRevision] = useState(false);
+  const [analysisText, setAnalysisText] = useState<string | null>(null);
+  const [pendingToolRun, setPendingToolRun] = useState<{ path: string; command: string } | null>(null);
+  const [runningToolRun, setRunningToolRun] = useState(false);
 
   /** Auto-completion: once every parsed block has been either applied or
    * explicitly rejected, there's nothing left to decide on for this step,
@@ -107,7 +118,7 @@ export function PlanStepCard({
     const newFiles = files
       .filter((path) => !resolved.has(path))
       .map((path) => ({ path, content: '', isNew: true }));
-    const prompt = buildStepPrompt(goal, allSteps, index, [...stepFiles, ...newFiles], stepTemplate);
+    const prompt = buildStepPrompt(goal, allSteps, index, [...stepFiles, ...newFiles], stepTemplate, analysisOnly);
     await navigator.clipboard.writeText(prompt);
   }
 
@@ -123,70 +134,120 @@ export function PlanStepCard({
     }
   }
 
-  function handleParseResponse() {
+  async function handleParseResponse() {
     if (!responseText.trim()) return;
-    const needFiles = detectNeedFilesRequest(responseText);
-    if (needFiles) {
-      const merged = [...new Set([...step.files, ...needFiles])];
+    const flow = detectControlFlow(responseText, { supportsRevisePlan: true });
+
+    if (flow.kind === 'needFiles') {
+      const merged = [...new Set([...step.files, ...flow.paths])];
       onFilesChange(merged);
       setPlanRevisionNote(null);
       setJustCopiedRevision(false);
       setBlocks([]);
+      setAnalysisText(null);
       setResponseText('');
       setJustCopiedStep(false);
       setStatusMessage('Copilotの要求に応じてファイルを追加中...');
       void copyStepPromptWithFiles(merged).then(() => {
         setJustCopiedStep(true);
-        setStatusMessage(`Copilotの要求により以下のファイルを対象ファイルに追加しました: ${needFiles.join(', ')}`);
+        setStatusMessage(`Copilotの要求により以下のファイルを対象ファイルに追加しました: ${flow.paths.join(', ')}`);
       });
       return;
     }
 
-    if (rootHandle) {
-      const grepPattern = detectGrepRequest(responseText);
-      if (grepPattern) {
-        setPlanRevisionNote(null);
-        setJustCopiedRevision(false);
-        setBlocks([]);
-        setResponseText('');
-        setJustCopiedStep(false);
-        setStatusMessage(`「${grepPattern}」を検索中...`);
-        void runGrepSearch(rootHandle, grepPattern).then(async (result) => {
-          await navigator.clipboard.writeText(buildToolResultPrompt('検索(grep)', grepPattern, result));
-          setJustCopiedStep(true);
-          setStatusMessage('検索結果を踏まえたプロンプトをコピーしました。');
-        });
-        return;
-      }
-
-      const listQuery = detectListFilesRequest(responseText);
-      if (listQuery !== null) {
-        setPlanRevisionNote(null);
-        setJustCopiedRevision(false);
-        setBlocks([]);
-        setResponseText('');
-        setJustCopiedStep(false);
-        setStatusMessage('ファイル一覧を取得中...');
-        void runListFiles(rootHandle, listQuery).then(async (result) => {
-          await navigator.clipboard.writeText(buildToolResultPrompt('ファイル一覧', listQuery, result));
-          setJustCopiedStep(true);
-          setStatusMessage('ファイル一覧を踏まえたプロンプトをコピーしました。');
-        });
-        return;
-      }
-    }
-
-    const revisionNote = detectPlanRevisionRequest(responseText);
-    if (revisionNote) {
-      setPlanRevisionNote(revisionNote);
+    if (flow.kind === 'grep' && rootHandle) {
+      setPlanRevisionNote(null);
       setJustCopiedRevision(false);
       setBlocks([]);
+      setAnalysisText(null);
+      setResponseText('');
+      setJustCopiedStep(false);
+      setStatusMessage(`「${flow.pattern}」を検索中...`);
+      void runGrepSearch(rootHandle, flow.pattern).then(async (result) => {
+        await navigator.clipboard.writeText(buildToolResultPrompt('検索(grep)', flow.pattern, result));
+        setJustCopiedStep(true);
+        setStatusMessage('検索結果を踏まえたプロンプトをコピーしました。');
+      });
+      return;
+    }
+
+    if (flow.kind === 'listFiles' && rootHandle) {
+      setPlanRevisionNote(null);
+      setJustCopiedRevision(false);
+      setBlocks([]);
+      setAnalysisText(null);
+      setResponseText('');
+      setJustCopiedStep(false);
+      setStatusMessage('ファイル一覧を取得中...');
+      void runListFiles(rootHandle, flow.query).then(async (result) => {
+        await navigator.clipboard.writeText(buildToolResultPrompt('ファイル一覧', flow.query, result));
+        setJustCopiedStep(true);
+        setStatusMessage('ファイル一覧を踏まえたプロンプトをコピーしました。');
+      });
+      return;
+    }
+
+    if (flow.kind === 'runTool' && rootHandle) {
+      setPlanRevisionNote(null);
+      setJustCopiedRevision(false);
+      setBlocks([]);
+      setAnalysisText(null);
+      setResponseText('');
+      setJustCopiedStep(false);
+      setStatusMessage(`「${flow.path}」の実行可否を確認中...`);
+      const resolution: RunToolResolution = await resolveRunToolRequest(rootHandle, flow.path, runCommands);
+      if (!resolution.ok) {
+        await navigator.clipboard.writeText(buildToolResultPrompt('実行リクエスト', resolution.path, resolution.message));
+        setJustCopiedStep(true);
+        setStatusMessage('実行できなかった旨を踏まえたプロンプトをコピーしました。');
+        return;
+      }
+      setPendingToolRun({ path: resolution.path, command: resolution.command });
+      setStatusMessage(null);
+      return;
+    }
+
+    if (flow.kind === 'runToolNamed') {
+      setPlanRevisionNote(null);
+      setJustCopiedRevision(false);
+      setBlocks([]);
+      setAnalysisText(null);
+      setResponseText('');
+      setJustCopiedStep(false);
+      setStatusMessage(`「${flow.name}」の実行可否を確認中...`);
+      const resolution: RunToolResolution = resolveNamedToolRequest(flow.name, namedCommands);
+      if (!resolution.ok) {
+        await navigator.clipboard.writeText(buildToolResultPrompt('実行リクエスト', resolution.path, resolution.message));
+        setJustCopiedStep(true);
+        setStatusMessage('実行できなかった旨を踏まえたプロンプトをコピーしました。');
+        return;
+      }
+      setPendingToolRun({ path: resolution.path, command: resolution.command });
+      setStatusMessage(null);
+      return;
+    }
+
+    if (flow.kind === 'revisePlan') {
+      setPlanRevisionNote(flow.note);
+      setJustCopiedRevision(false);
+      setBlocks([]);
+      setAnalysisText(null);
       setJustCopiedStep(false);
       setStatusMessage(null);
       return;
     }
+
     setPlanRevisionNote(null);
     setJustCopiedStep(false);
+    if (analysisOnly) {
+      setBlocks([]);
+      setBlockTargets({});
+      setBlockActionStatus({});
+      setAnalysisText(responseText);
+      setStatusMessage(null);
+      return;
+    }
+    setAnalysisText(null);
     const parsed = extractCodeBlocks(responseText);
     setBlocks(parsed);
     const defaults: Record<string, string> = {};
@@ -209,6 +270,27 @@ export function PlanStepCard({
     setBlockTargets(defaults);
     setBlockActionStatus({});
     setStatusMessage(null);
+  }
+
+  async function handleConfirmToolRun() {
+    if (!pendingToolRun) return;
+    setRunningToolRun(true);
+    useDockStore.getState().setVisible('terminal', true);
+    const result = await runAndCapture(pendingToolRun.command, `実行: ${pendingToolRun.path}`);
+    setRunningToolRun(false);
+    setPendingToolRun(null);
+    await navigator.clipboard.writeText(buildRunResultPrompt(result.command, result.exitCode, result.output));
+    setJustCopiedStep(true);
+    setStatusMessage(
+      result.exitCode === 0
+        ? '実行が成功しました。結果を踏まえたプロンプトをコピーしました。'
+        : `終了コード ${result.exitCode ?? '不明'} でした。結果を踏まえたプロンプトをコピーしました。`,
+    );
+  }
+
+  function handleRejectToolRun() {
+    setPendingToolRun(null);
+    setStatusMessage('実行をキャンセルしました。');
   }
 
   /** Copies a prompt asking Copilot to return a full replacement plan given
@@ -305,7 +387,6 @@ export function PlanStepCard({
             onAdd={(path) => onFilesChange([...step.files, path])}
             onRemove={(path) => onFilesChange(step.files.filter((p) => p !== path))}
           />
-
           <div className="copilot-actions">
             <button className="primary" disabled={copying} onClick={() => void handleCopyStepPrompt()}>
               ① 実行プロンプトをコピー
@@ -331,10 +412,22 @@ export function PlanStepCard({
             onChange={(e) => setResponseText(e.target.value)}
           />
           <div className="copilot-actions">
-            <button className="primary" disabled={!responseText.trim()} onClick={handleParseResponse}>
+            <button className="primary" disabled={!responseText.trim()} onClick={() => void handleParseResponse()}>
               コードブロックを解析
             </button>
           </div>
+
+          {pendingToolRun && (
+            <ToolRunConfirmation
+              path={pendingToolRun.path}
+              command={pendingToolRun.command}
+              running={runningToolRun}
+              onConfirm={() => void handleConfirmToolRun()}
+              onReject={handleRejectToolRun}
+            />
+          )}
+
+          {analysisText !== null && <pre className="copilot-analysis-text">{analysisText}</pre>}
 
           {planRevisionNote && (
             <div className="copilot-plan-revision">

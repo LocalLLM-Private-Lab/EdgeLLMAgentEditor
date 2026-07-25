@@ -2,11 +2,17 @@ import { useState } from 'react';
 import { useEditorTabsStore } from '../state/editorTabsStore';
 import { useWorkspaceStore } from '../state/workspaceStore';
 import { usePromptTemplateStore } from '../state/promptTemplateStore';
-import { buildFileEditPrompt, buildToolResultPrompt } from '../copilot/promptTemplates';
+import { useRunCommandStore, extensionOf, buildRunCommand } from '../state/runCommandStore';
+import { useNamedCommandStore } from '../state/namedCommandStore';
+import { useDockStore } from '../state/dockStore';
+import { buildFileEditPrompt, buildToolResultPrompt, buildRunResultPrompt } from '../copilot/promptTemplates';
 import { buildRepoMap } from '../copilot/repoMap';
 import { extractCodeBlocks, type ExtractedCodeBlock } from '../copilot/codeBlockParser';
-import { detectNeedFilesRequest, detectGrepRequest, detectListFilesRequest } from '../copilot/responseControl';
+import { detectControlFlow } from '../copilot/responseControl';
 import { runGrepSearch, runListFiles } from '../copilot/localTools';
+import { resolveRunToolRequest, resolveNamedToolRequest, type RunToolResolution } from '../copilot/runToolResolver';
+import { runAndCapture } from '../copilot/runAndCapture';
+import { resolveRelativeFilePath } from '../terminal/resolveRelativeFilePath';
 import {
   prepareApplyToTreeNode,
   prepareApplyForNewFile,
@@ -17,13 +23,64 @@ import { readFileText } from '../fs/fsaWorkspace';
 import { FileContextPicker } from './FileContextPicker';
 import { DiffViewModal } from './DiffViewModal';
 import { PlanPanel } from './PlanPanel';
+import { ToolRunConfirmation } from './ToolRunConfirmation';
 import './CopilotPanel.css';
 
 type CopilotSubTab = 'quick' | 'plan';
+type CopilotMode = 'edit' | 'analysis';
 
 export function CopilotPanel() {
+  // Top-level choice: what am I trying to do. Drives `analysisOnly`
+  // uniformly across both the quick-request flow and PlanPanel/
+  // PlanStepCard. Both the quick-request panel and PlanPanel are mounted
+  // twice — once per mode — and kept alive simultaneously (see `visible`
+  // below) rather than conditionally rendered, so switching modes never
+  // resets or mixes together an in-progress edit session with an
+  // in-progress analysis session.
+  const [mode, setMode] = useState<CopilotMode>('edit');
   const [subTab, setSubTab] = useState<CopilotSubTab>('quick');
 
+  return (
+    <div className="copilot-panel">
+      <div className="copilot-mode-tabs">
+        <button className={mode === 'edit' ? 'active' : ''} onClick={() => setMode('edit')}>
+          編集モード
+        </button>
+        <button className={mode === 'analysis' ? 'active' : ''} onClick={() => setMode('analysis')}>
+          解析モード
+        </button>
+      </div>
+      <div className="copilot-subtabs">
+        <button
+          className={subTab === 'quick' ? 'active' : ''}
+          onClick={() => setSubTab('quick')}
+        >
+          単発リクエスト
+        </button>
+        <button className={subTab === 'plan' ? 'active' : ''} onClick={() => setSubTab('plan')}>
+          計画実行
+        </button>
+      </div>
+
+      <QuickRequestPanel analysisOnly={false} visible={mode === 'edit' && subTab === 'quick'} />
+      <QuickRequestPanel analysisOnly={true} visible={mode === 'analysis' && subTab === 'quick'} />
+      <PlanPanel analysisOnly={false} visible={mode === 'edit' && subTab === 'plan'} />
+      <PlanPanel analysisOnly={true} visible={mode === 'analysis' && subTab === 'plan'} />
+    </div>
+  );
+}
+
+interface QuickRequestPanelProps {
+  /** Fixed for this instance's whole lifetime — CopilotPanel mounts one
+   * QuickRequestPanel per mode rather than toggling this on a shared
+   * instance, so each mode's instruction/response/blocks stay independent
+   * local state instead of one shared set that gets reinterpreted when the
+   * mode changes. */
+  analysisOnly: boolean;
+  visible: boolean;
+}
+
+function QuickRequestPanel({ analysisOnly, visible }: QuickRequestPanelProps) {
   const openFiles = useEditorTabsStore((s) => s.openFiles);
   const activeFileId = useEditorTabsStore((s) => s.activeFileId);
   const activeTab = openFiles.find((f) => f.id === activeFileId);
@@ -43,6 +100,15 @@ export function CopilotPanel() {
   const [applyTargetByBlock, setApplyTargetByBlock] = useState<Record<string, string>>({});
   const [diffPreview, setDiffPreview] = useState<ApplyPreview | null>(null);
   const [justCopiedPrompt, setJustCopiedPrompt] = useState(false);
+  const [analysisText, setAnalysisText] = useState<string | null>(null);
+
+  const runCommands = useRunCommandStore((s) => s.commands);
+  const namedCommands = useNamedCommandStore((s) => s.commands);
+  const runCommandTemplate = activeTab ? (runCommands[extensionOf(activeTab.name) ?? ''] ?? null) : null;
+  const [checkingRun, setCheckingRun] = useState(false);
+
+  const [pendingToolRun, setPendingToolRun] = useState<{ path: string; command: string } | null>(null);
+  const [runningToolRun, setRunningToolRun] = useState(false);
 
   // Takes an explicit file list rather than reading contextFiles from state
   // — handleParseResponse needs to copy a prompt built from a just-merged
@@ -66,7 +132,13 @@ export function CopilotPanel() {
     const newFiles = files
       .filter((path) => !resolved.has(path))
       .map((path) => ({ path, content: '', isNew: true }));
-    const prompt = buildFileEditPrompt(instruction, [...resolvedFiles, ...newFiles], repoMap, promptTemplate);
+    const prompt = buildFileEditPrompt(
+      instruction,
+      [...resolvedFiles, ...newFiles],
+      repoMap,
+      promptTemplate,
+      analysisOnly,
+    );
     await navigator.clipboard.writeText(prompt);
   }
 
@@ -81,53 +153,98 @@ export function CopilotPanel() {
   // block needs a DIFFERENT target. Only when a block has no detected path
   // at all does it fall back to the active file, since that's the one
   // sensible guess for a genuinely single-file response.
-  function handleParseResponse() {
+  async function handleParseResponse() {
     if (!pastedResponse.trim()) return;
-    const needFiles = detectNeedFilesRequest(pastedResponse);
-    if (needFiles) {
-      const merged = [...new Set([...contextFiles, ...needFiles])];
+    const flow = detectControlFlow(pastedResponse);
+
+    if (flow.kind === 'needFiles') {
+      const merged = [...new Set([...contextFiles, ...flow.paths])];
       setContextFiles(merged);
       setBlocks([]);
+      setAnalysisText(null);
       setPastedResponse('');
       setJustCopiedPrompt(false);
       setStatus('Copilotの要求に応じてファイルを追加中...');
       void copyPromptWithFiles(merged).then(() => {
         setJustCopiedPrompt(true);
-        setStatus(`Copilotの要求により以下のファイルをコンテキストに追加しました: ${needFiles.join(', ')}`);
+        setStatus(`Copilotの要求により以下のファイルをコンテキストに追加しました: ${flow.paths.join(', ')}`);
       });
       return;
     }
 
-    if (rootHandle) {
-      const grepPattern = detectGrepRequest(pastedResponse);
-      if (grepPattern) {
-        setBlocks([]);
-        setPastedResponse('');
-        setJustCopiedPrompt(false);
-        setStatus(`「${grepPattern}」を検索中...`);
-        void runGrepSearch(rootHandle, grepPattern).then(async (result) => {
-          await navigator.clipboard.writeText(buildToolResultPrompt('検索(grep)', grepPattern, result));
-          setJustCopiedPrompt(true);
-          setStatus('検索結果を踏まえたプロンプトをコピーしました。');
-        });
-        return;
-      }
-
-      const listQuery = detectListFilesRequest(pastedResponse);
-      if (listQuery !== null) {
-        setBlocks([]);
-        setPastedResponse('');
-        setJustCopiedPrompt(false);
-        setStatus('ファイル一覧を取得中...');
-        void runListFiles(rootHandle, listQuery).then(async (result) => {
-          await navigator.clipboard.writeText(buildToolResultPrompt('ファイル一覧', listQuery, result));
-          setJustCopiedPrompt(true);
-          setStatus('ファイル一覧を踏まえたプロンプトをコピーしました。');
-        });
-        return;
-      }
+    if (flow.kind === 'grep' && rootHandle) {
+      setBlocks([]);
+      setAnalysisText(null);
+      setPastedResponse('');
+      setJustCopiedPrompt(false);
+      setStatus(`「${flow.pattern}」を検索中...`);
+      void runGrepSearch(rootHandle, flow.pattern).then(async (result) => {
+        await navigator.clipboard.writeText(buildToolResultPrompt('検索(grep)', flow.pattern, result));
+        setJustCopiedPrompt(true);
+        setStatus('検索結果を踏まえたプロンプトをコピーしました。');
+      });
+      return;
     }
+
+    if (flow.kind === 'listFiles' && rootHandle) {
+      setBlocks([]);
+      setAnalysisText(null);
+      setPastedResponse('');
+      setJustCopiedPrompt(false);
+      setStatus('ファイル一覧を取得中...');
+      void runListFiles(rootHandle, flow.query).then(async (result) => {
+        await navigator.clipboard.writeText(buildToolResultPrompt('ファイル一覧', flow.query, result));
+        setJustCopiedPrompt(true);
+        setStatus('ファイル一覧を踏まえたプロンプトをコピーしました。');
+      });
+      return;
+    }
+
+    if (flow.kind === 'runTool' && rootHandle) {
+      setBlocks([]);
+      setAnalysisText(null);
+      setPastedResponse('');
+      setJustCopiedPrompt(false);
+      setStatus(`「${flow.path}」の実行可否を確認中...`);
+      const resolution: RunToolResolution = await resolveRunToolRequest(rootHandle, flow.path, runCommands);
+      if (!resolution.ok) {
+        await navigator.clipboard.writeText(buildToolResultPrompt('実行リクエスト', resolution.path, resolution.message));
+        setJustCopiedPrompt(true);
+        setStatus('実行できなかった旨を踏まえたプロンプトをコピーしました。');
+        return;
+      }
+      setPendingToolRun({ path: resolution.path, command: resolution.command });
+      setStatus(null);
+      return;
+    }
+
+    if (flow.kind === 'runToolNamed') {
+      setBlocks([]);
+      setAnalysisText(null);
+      setPastedResponse('');
+      setJustCopiedPrompt(false);
+      setStatus(`「${flow.name}」の実行可否を確認中...`);
+      const resolution: RunToolResolution = resolveNamedToolRequest(flow.name, namedCommands);
+      if (!resolution.ok) {
+        await navigator.clipboard.writeText(buildToolResultPrompt('実行リクエスト', resolution.path, resolution.message));
+        setJustCopiedPrompt(true);
+        setStatus('実行できなかった旨を踏まえたプロンプトをコピーしました。');
+        return;
+      }
+      setPendingToolRun({ path: resolution.path, command: resolution.command });
+      setStatus(null);
+      return;
+    }
+
     setJustCopiedPrompt(false);
+    if (analysisOnly) {
+      setBlocks([]);
+      setApplyTargetByBlock({});
+      setAnalysisText(pastedResponse);
+      setStatus(null);
+      return;
+    }
+    setAnalysisText(null);
     const parsed = extractCodeBlocks(pastedResponse);
     setBlocks(parsed);
     const activePath = activeTab?.pathSegments.join('/') ?? '';
@@ -135,6 +252,47 @@ export function CopilotPanel() {
     for (const block of parsed) defaults[block.id] = block.suggestedPath ?? activePath;
     setApplyTargetByBlock(defaults);
     setStatus(null);
+  }
+
+  async function handleRunAndCheck() {
+    if (!activeTab || !runCommandTemplate) return;
+    setCheckingRun(true);
+    setStatus('実行中...');
+    useDockStore.getState().setVisible('terminal', true);
+    const command = buildRunCommand(runCommandTemplate, resolveRelativeFilePath(activeTab.pathSegments));
+    const result = await runAndCapture(command, `実行: ${activeTab.name}`);
+    setCheckingRun(false);
+    if (result.exitCode === 0) {
+      setStatus('✓ エラーなし(終了コード 0)');
+      return;
+    }
+    await navigator.clipboard.writeText(buildRunResultPrompt(result.command, result.exitCode, result.output));
+    setJustCopiedPrompt(true);
+    setStatus(`終了コード ${result.exitCode ?? '不明'} で終了しました。エラー内容を踏まえたプロンプトをコピーしました。`);
+  }
+
+  async function handleConfirmToolRun() {
+    if (!pendingToolRun) return;
+    setRunningToolRun(true);
+    useDockStore.getState().setVisible('terminal', true);
+    const result = await runAndCapture(pendingToolRun.command, `実行: ${pendingToolRun.path}`);
+    setRunningToolRun(false);
+    setPendingToolRun(null);
+    // Unlike handleRunAndCheck's manual button, always copy a follow-up
+    // here — Copilot explicitly asked for this and is waiting on the
+    // result either way (e.g. "run the tests" — success matters too).
+    await navigator.clipboard.writeText(buildRunResultPrompt(result.command, result.exitCode, result.output));
+    setJustCopiedPrompt(true);
+    setStatus(
+      result.exitCode === 0
+        ? '実行が成功しました。結果を踏まえたプロンプトをコピーしました。'
+        : `終了コード ${result.exitCode ?? '不明'} でした。結果を踏まえたプロンプトをコピーしました。`,
+    );
+  }
+
+  function handleRejectToolRun() {
+    setPendingToolRun(null);
+    setStatus('実行をキャンセルしました。');
   }
 
   async function resolveApplyPreview(targetPath: string, block: ExtractedCodeBlock): Promise<ApplyPreview | null> {
@@ -176,22 +334,7 @@ export function CopilotPanel() {
   }
 
   return (
-    <div className="copilot-panel">
-      <div className="copilot-subtabs">
-        <button
-          className={subTab === 'quick' ? 'active' : ''}
-          onClick={() => setSubTab('quick')}
-        >
-          単発リクエスト
-        </button>
-        <button className={subTab === 'plan' ? 'active' : ''} onClick={() => setSubTab('plan')}>
-          計画実行
-        </button>
-      </div>
-      {subTab === 'plan' ? (
-        <PlanPanel />
-      ) : (
-        <>
+    <div style={{ display: visible ? 'contents' : 'none' }}>
       <div className="copilot-sections-column">
       {(justCopiedPrompt || blocks.length > 0) && instruction.trim() && (
         <div className="copilot-progress-bar">
@@ -248,6 +391,11 @@ export function CopilotPanel() {
               <button className="primary" disabled={!instruction.trim()} onClick={() => void handleCopyPrompt()}>
                 クリップボードにコピー
               </button>
+              {runCommandTemplate && (
+                <button disabled={checkingRun} onClick={() => void handleRunAndCheck()}>
+                  {checkingRun ? '実行中...' : '▶ 実行してエラーを確認'}
+                </button>
+              )}
             </div>
             {justCopiedPrompt && (
               <div className="copilot-flow-hint">
@@ -272,15 +420,27 @@ export function CopilotPanel() {
           onChange={(e) => setPastedResponse(e.target.value)}
         />
         <div className="copilot-actions">
-          <button className="primary" disabled={!pastedResponse.trim()} onClick={handleParseResponse}>
+          <button className="primary" disabled={!pastedResponse.trim()} onClick={() => void handleParseResponse()}>
             コードブロックを解析
           </button>
         </div>
       </div>
 
+      {pendingToolRun && (
+        <ToolRunConfirmation
+          path={pendingToolRun.path}
+          command={pendingToolRun.command}
+          running={runningToolRun}
+          onConfirm={() => void handleConfirmToolRun()}
+          onReject={handleRejectToolRun}
+        />
+      )}
+
       <div className="copilot-section">
         <div className="copilot-section-title">③ 解析結果</div>
-        {blocks.length === 0 ? (
+        {analysisText !== null ? (
+          <pre className="copilot-analysis-text">{analysisText}</pre>
+        ) : blocks.length === 0 ? (
           <div className="copilot-hint">まだ解析されたコードブロックはありません。</div>
         ) : (
           <>
@@ -330,8 +490,6 @@ export function CopilotPanel() {
           }}
           onCancel={() => setDiffPreview(null)}
         />
-      )}
-        </>
       )}
     </div>
   );

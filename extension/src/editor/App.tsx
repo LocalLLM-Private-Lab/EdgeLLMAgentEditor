@@ -6,6 +6,7 @@ import { useTerminalStore } from './state/terminalStore';
 import { useKeybindingStore } from './state/keybindingStore';
 import { useLspStore } from './lsp/lspStore';
 import { useRunCommandStore, extensionOf, buildRunCommand } from './state/runCommandStore';
+import { useNamedCommandStore } from './state/namedCommandStore';
 import { resolveRelativeFilePath } from './terminal/resolveRelativeFilePath';
 import { useDockStore, panelsInZone } from './state/dockStore';
 import { FileTree } from './components/FileTree/FileTree';
@@ -53,6 +54,7 @@ export default function App() {
 
   const runCommands = useRunCommandStore((s) => s.commands);
   const loadRunCommands = useRunCommandStore((s) => s.loadCommands);
+  const loadNamedCommands = useNamedCommandStore((s) => s.loadCommands);
   const queueRunRequest = useTerminalStore((s) => s.queueRunRequest);
   const [settingsCategory, setSettingsCategory] = useState<SettingsCategory | null>(null);
   const loadPromptTemplates = usePromptTemplateStore((s) => s.loadTemplates);
@@ -128,6 +130,7 @@ export default function App() {
     void restoreFromLastSession();
     void ensureTerminalConnected();
     void loadRunCommands();
+    void loadNamedCommands();
     void loadPromptTemplates();
     void loadPlanPromptTemplates();
     void loadKeybindingMode();
@@ -137,6 +140,7 @@ export default function App() {
     restoreFromLastSession,
     ensureTerminalConnected,
     loadRunCommands,
+    loadNamedCommands,
     loadPromptTemplates,
     loadPlanPromptTemplates,
     loadKeybindingMode,

@@ -95,7 +95,7 @@ fn handle_start() -> serde_json::Value {
                 }
                 None => serde_json::json!({
                     "status": "error",
-                    "message": "lsp-hostは起動しましたが、loopbackポートのlistenを確認できませんでした"
+                    "message": "lsp-host started, but its loopback port could not be verified"
                 }),
             }
         }

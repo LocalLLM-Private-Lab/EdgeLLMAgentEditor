@@ -7,7 +7,14 @@ import { isLspLanguage } from './lspLanguages';
 import { type LspRange, lspRangeToMonaco, normalizeUriKey } from './uriTranslation';
 import { getStoredValue, setStoredValue } from '../../shared/chromeStorage';
 
-export type LspStatus = 'idle' | 'connecting' | 'fetching' | 'installing' | 'starting' | 'ready' | 'error';
+export type LspStatus =
+  | 'idle'
+  | 'connecting'
+  | 'fetching'
+  | 'installing'
+  | 'starting'
+  | 'ready'
+  | 'error';
 
 const WORKSPACE_ROOT_STORAGE_KEY = 'lspWorkspaceRootOverride';
 
@@ -16,6 +23,10 @@ interface LspState {
   fetchProgress: { downloaded: number; total: number | null } | null;
   installLanguage: string | null;
   installMessage: string | null;
+  indexing: boolean;
+  indexingLanguage: string | null;
+  indexingMessage: string | null;
+  indexingProgress: number | null;
   errorMessage: string | null;
   rootUri: string | null;
   serverVersion: string | null;
@@ -77,10 +88,21 @@ const activeLanguages = new Set<string>();
 let nextRequestId = 1;
 const pendingRequests = new Map<
   number,
-  { language: string; resolve: (value: unknown) => void; reject: (err: Error) => void }
+  { language: string; method: string; resolve: (value: unknown) => void; reject: (err: Error) => void }
 >();
 let rustBuildScriptsDisabled = false;
 const rustFallbackRestarting = new Set<string>();
+const indexingLanguages = new Set<string>();
+const indexingTokens = new Map<string, Set<string>>();
+const indexingMessages = new Map<string, { message: string; progress: number | null }>();
+const indexingFinishTimers = new Map<string, ReturnType<typeof setTimeout>>();
+const indexingFallbackTimers = new Map<string, ReturnType<typeof setTimeout>>();
+
+const INDEXING_SETTLE_MS = 500;
+// Some language servers initialize successfully without emitting a standard
+// progress notification. Keep the common indicator useful without leaving it
+// stuck forever in that case.
+const INDEXING_FALLBACK_MS = 5000;
 
 interface TrackedDocument {
   uri: string;
@@ -92,6 +114,155 @@ const documentVersions = new Map<string, number>();
 const changeTimers = new Map<string, ReturnType<typeof setTimeout>>();
 
 const CHANGE_DEBOUNCE_MS = 300;
+
+function clearIndexingLanguage(language: string): void {
+  indexingLanguages.delete(language);
+  indexingTokens.delete(language);
+  indexingMessages.delete(language);
+  const finishTimer = indexingFinishTimers.get(language);
+  if (finishTimer) clearTimeout(finishTimer);
+  indexingFinishTimers.delete(language);
+  const fallbackTimer = indexingFallbackTimers.get(language);
+  if (fallbackTimer) clearTimeout(fallbackTimer);
+  indexingFallbackTimers.delete(language);
+}
+
+function resetIndexingTracking(): void {
+  for (const timer of indexingFinishTimers.values()) clearTimeout(timer);
+  for (const timer of indexingFallbackTimers.values()) clearTimeout(timer);
+  indexingLanguages.clear();
+  indexingTokens.clear();
+  indexingMessages.clear();
+  indexingFinishTimers.clear();
+  indexingFallbackTimers.clear();
+}
+
+function publishIndexingState(set: (partial: Partial<LspState>) => void): void {
+  const language = indexingLanguages.values().next().value as string | undefined;
+  const detail = language ? indexingMessages.get(language) : undefined;
+  set({
+    indexing: indexingLanguages.size > 0,
+    indexingLanguage: language ?? null,
+    indexingMessage: detail?.message ?? null,
+    indexingProgress: detail?.progress ?? null,
+  });
+}
+
+function markIndexingUsable(language: string, set: (partial: Partial<LspState>) => void): void {
+  if (!indexingLanguages.has(language)) return;
+  clearIndexingLanguage(language);
+  publishIndexingState(set);
+}
+
+function beginIndexing(language: string, set: (partial: Partial<LspState>) => void): void {
+  clearIndexingLanguage(language);
+  indexingLanguages.add(language);
+  indexingTokens.set(language, new Set());
+  indexingMessages.set(language, { message: 'Analyzing workspace...', progress: null });
+  if (language !== 'rust') {
+    indexingFallbackTimers.set(
+      language,
+      setTimeout(() => {
+        indexingFallbackTimers.delete(language);
+        if ((indexingTokens.get(language)?.size ?? 0) === 0) {
+          clearIndexingLanguage(language);
+          publishIndexingState(set);
+        }
+      }, INDEXING_FALLBACK_MS),
+    );
+  }
+  publishIndexingState(set);
+}
+
+function finishIndexingWhenIdle(language: string, set: (partial: Partial<LspState>) => void): void {
+  // rust-analyzer's progress phases can end before its analyzer is actually
+  // quiescent. Its server-status notification is the authoritative signal.
+  if (language === 'rust') return;
+  const tokens = indexingTokens.get(language);
+  if (!tokens || tokens.size > 0) return;
+  const existingTimer = indexingFinishTimers.get(language);
+  if (existingTimer) clearTimeout(existingTimer);
+  indexingFinishTimers.set(
+    language,
+    setTimeout(() => {
+      indexingFinishTimers.delete(language);
+      if ((indexingTokens.get(language)?.size ?? 0) > 0) return;
+      clearIndexingLanguage(language);
+      publishIndexingState(set);
+    }, INDEXING_SETTLE_MS),
+  );
+}
+
+function handleRustServerStatus(params: unknown, set: (partial: Partial<LspState>) => void): void {
+  if (typeof params !== 'object' || params === null) return;
+  const status = params as { health?: unknown; quiescent?: unknown; message?: unknown };
+  if (typeof status.quiescent !== 'boolean') return;
+
+  if (status.health === 'ok' && status.quiescent) {
+    clearIndexingLanguage('rust');
+    publishIndexingState(set);
+    return;
+  }
+
+  if (!indexingLanguages.has('rust')) {
+    indexingLanguages.add('rust');
+    indexingTokens.set('rust', new Set());
+  }
+  const fallbackTimer = indexingFallbackTimers.get('rust');
+  if (fallbackTimer) {
+    clearTimeout(fallbackTimer);
+    indexingFallbackTimers.delete('rust');
+  }
+  indexingMessages.set('rust', {
+    message: typeof status.message === 'string' ? status.message : 'Analyzing workspace...',
+    progress: null,
+  });
+  publishIndexingState(set);
+}
+
+function handleProgress(params: unknown, language: string, set: (partial: Partial<LspState>) => void): void {
+  if (typeof params !== 'object' || params === null) return;
+  const progress = params as { token?: unknown; value?: unknown };
+  const token =
+    typeof progress.token === 'string' || typeof progress.token === 'number'
+      ? String(progress.token)
+      : null;
+  if (!token || typeof progress.value !== 'object' || progress.value === null) return;
+  const value = progress.value as {
+    kind?: unknown;
+    title?: unknown;
+    message?: unknown;
+    percentage?: unknown;
+  };
+  const kind = value.kind;
+  if (kind === 'begin' || kind === 'report') {
+    if (!indexingLanguages.has(language)) {
+      indexingLanguages.add(language);
+      indexingTokens.set(language, new Set());
+    }
+    indexingTokens.get(language)?.add(token);
+    const fallbackTimer = indexingFallbackTimers.get(language);
+    if (fallbackTimer) {
+      clearTimeout(fallbackTimer);
+      indexingFallbackTimers.delete(language);
+    }
+    const currentMessage = indexingMessages.get(language);
+    indexingMessages.set(language, {
+      message:
+        typeof value.message === 'string'
+          ? value.message
+          : typeof value.title === 'string'
+            ? value.title
+            : currentMessage?.message ?? 'Analyzing workspace...',
+      progress:
+        typeof value.percentage === 'number' ? Math.max(0, Math.min(100, value.percentage)) : null,
+    });
+    publishIndexingState(set);
+  } else if (kind === 'end') {
+    indexingTokens.get(language)?.delete(token);
+    finishIndexingWhenIdle(language, set);
+  }
+}
 
 const SEVERITY_MAP: Record<number, monaco.MarkerSeverity> = {
   1: monaco.MarkerSeverity.Error,
@@ -110,11 +281,11 @@ export function getUriForModel(model: monaco.editor.ITextModel): string | null {
 function sendRequest(language: string, method: string, params: unknown): Promise<unknown> {
   return new Promise((resolve, reject) => {
     if (!client) {
-      reject(new Error('LSPセッションが接続されていません'));
+      reject(new Error('LSP session is not connected'));
       return;
     }
     const id = nextRequestId++;
-    pendingRequests.set(id, { language, resolve, reject });
+    pendingRequests.set(id, { language, method, resolve, reject });
     client.send({ type: 'lsp', language, payload: { jsonrpc: '2.0', id, method, params } });
   });
 }
@@ -223,6 +394,8 @@ async function performInitialize(
           hover: { contentFormat: ['plaintext', 'markdown'] },
           publishDiagnostics: { relatedInformation: false },
         },
+        window: { workDoneProgress: true },
+        ...(language === 'rust' ? { experimental: { serverStatusNotification: true } } : {}),
       },
     })) as { serverInfo?: { version?: string } } | undefined;
     sendNotification(language, 'initialized', {});
@@ -239,13 +412,22 @@ async function performInitialize(
       installLanguage: null,
       installMessage: null,
     });
+    beginIndexing(language, set);
     sessionDeferreds.get(language)?.resolve();
     sessionDeferreds.delete(language);
   } catch (err) {
     const error = err instanceof Error ? err : new Error(String(err));
     if (rustFallbackRestarting.has(language)) return;
     initializedLanguages.delete(language);
-    set({ status: 'error', errorMessage: error.message });
+    resetIndexingTracking();
+    set({
+      status: 'error',
+      errorMessage: error.message,
+      indexing: false,
+      indexingLanguage: null,
+      indexingMessage: null,
+      indexingProgress: null,
+    });
     sessionDeferreds.get(language)?.reject(error);
     sessionDeferreds.delete(language);
   }
@@ -284,36 +466,41 @@ function handleServerMessage(msg: ServerMessage, set: (partial: Partial<LspState
       break;
     case 'fetch_error': {
       const error = new Error(msg.message);
-      set({ status: 'error', errorMessage: msg.message });
+      resetIndexingTracking();
+      set({ status: 'error', errorMessage: msg.message, indexing: false, indexingLanguage: null, indexingMessage: null, indexingProgress: null });
       rejectAllSessions(error);
       break;
     }
     case 'process_exited':
       if (rustFallbackRestarting.has(msg.language)) break;
+      resetIndexingTracking();
       initializedLanguages.delete(msg.language);
       sessionPromises.delete(msg.language);
-      sessionDeferreds.get(msg.language)?.reject(new Error(`${msg.language} の言語サーバーが終了しました`));
+      sessionDeferreds.get(msg.language)?.reject(new Error(`${msg.language} language server exited`));
       sessionDeferreds.delete(msg.language);
-      set({ status: 'error', errorMessage: `${msg.language} の言語サーバーが終了しました` });
+      set({ status: 'error', errorMessage: `${msg.language} language server exited`, indexing: false, indexingLanguage: null, indexingMessage: null, indexingProgress: null });
       break;
     case 'rust_analyzer_build_scripts_crashed': {
       if (msg.language !== 'rust' || rustBuildScriptsDisabled) {
-        const error = new Error('rust-analyzerのbuild script解析が再起動後も失敗しました');
-        set({ status: 'error', errorMessage: error.message });
+        const error = new Error('rust-analyzer build script analysis failed after restart');
+        resetIndexingTracking();
+        set({ status: 'error', errorMessage: error.message, indexing: false, indexingLanguage: null, indexingMessage: null, indexingProgress: null });
         rejectAllSessions(error);
         break;
       }
       rustBuildScriptsDisabled = true;
       rustFallbackRestarting.add(msg.language);
+      resetIndexingTracking();
       initializedLanguages.delete(msg.language);
-      rejectPendingRequests(msg.language, new Error('rust-analyzerをbuild script無効で再起動しています'));
-      set({ status: 'starting', errorMessage: 'rust-analyzerのbuild scriptクラッシュを検知。無効化して再起動中です' });
+      rejectPendingRequests(msg.language, new Error('Restarting rust-analyzer with build scripts disabled'));
+      set({ status: 'starting', errorMessage: 'rust-analyzer build script crash detected; restarting with build scripts disabled' });
       client?.send({ type: 'restart_session', language: msg.language });
       break;
     }
     case 'error': {
       const error = new Error(msg.message);
-      set({ status: 'error', errorMessage: msg.message });
+      resetIndexingTracking();
+      set({ status: 'error', errorMessage: msg.message, indexing: false, indexingLanguage: null, indexingMessage: null, indexingProgress: null });
       rejectAllSessions(error);
       break;
     }
@@ -323,18 +510,42 @@ function handleServerMessage(msg: ServerMessage, set: (partial: Partial<LspState
       const record = payload as Record<string, unknown>;
       if (typeof record.id === 'number') {
         const pending = pendingRequests.get(record.id);
-        if (!pending) return;
+        if (!pending) {
+          // Reply to server-initiated LSP requests such as
+          // window/workDoneProgress/create. The progress capability is
+          // advertised below so language servers can report their work.
+          if (typeof record.method === 'string') {
+            client?.send({
+              type: 'lsp',
+              language: msg.language,
+              payload: { jsonrpc: '2.0', id: record.id, result: null },
+            });
+          }
+          return;
+        }
         pendingRequests.delete(record.id);
         if (record.error && typeof record.error === 'object') {
           const message = (record.error as Record<string, unknown>).message;
-          pending.reject(new Error(typeof message === 'string' ? message : 'LSPエラー'));
+          pending.reject(new Error(typeof message === 'string' ? message : 'LSP error'));
         } else {
+          // A successful post-initialize request is a stronger signal of
+          // actual usability than the end of a background progress phase.
+          if (pending.method !== 'initialize') markIndexingUsable(pending.language, set);
           pending.resolve(record.result);
         }
         return;
       }
+      if (record.method === '$/progress') {
+        handleProgress(record.params, msg.language, set);
+        return;
+      }
+      if (record.method === 'experimental/serverStatus' && msg.language === 'rust') {
+        handleRustServerStatus(record.params, set);
+        return;
+      }
       if (record.method === 'textDocument/publishDiagnostics') {
         applyDiagnostics(msg.language, record.params as PublishDiagnosticsParams);
+        markIndexingUsable(msg.language, set);
       }
       break;
     }
@@ -369,8 +580,9 @@ function connect(
             }
           }
         } else if (wsState === 'error') {
-          const error = new Error('lsp-hostへの接続に失敗しました');
-          set({ status: 'error', errorMessage: error.message });
+          const error = new Error('Failed to connect to lsp-host');
+          resetIndexingTracking();
+          set({ status: 'error', errorMessage: error.message, indexing: false, indexingLanguage: null, indexingMessage: null, indexingProgress: null });
           connectionDeferred?.reject(error);
           connectionDeferred = null;
         }
@@ -391,14 +603,18 @@ async function ensureConnection(set: (partial: Partial<LspState>) => void): Prom
       fetchProgress: null,
       installLanguage: null,
       installMessage: null,
+      indexing: false,
+      indexingLanguage: null,
+      indexingMessage: null,
+      indexingProgress: null,
     });
     const launch = await launchLspHostViaNativeMessaging();
     if (launch.status !== 'started' && launch.status !== 'already_running') {
       const message =
         launch.status === 'timeout'
-          ? '応答がありません。Edgeを完全に再起動(全ウィンドウを閉じる)してから再度お試しください。'
+          ? 'No response. Close all Edge windows, restart Edge, and try again.'
           : launch.status === 'unavailable'
-            ? `lsp-hostが未登録です。lsp-host/install-native-messaging-host.bat を一度実行してください。(${launch.message})`
+            ? `lsp-host is not registered. Run lsp-host/install-native-messaging-host.bat once. (${launch.message})`
             : launch.message;
       throw new Error(message);
     }
@@ -446,6 +662,10 @@ export const useLspStore = create<LspState>((set, get) => ({
   fetchProgress: null,
   installLanguage: null,
   installMessage: null,
+  indexing: false,
+  indexingLanguage: null,
+  indexingMessage: null,
+  indexingProgress: null,
   errorMessage: null,
   rootUri: null,
   serverVersion: null,
@@ -470,9 +690,20 @@ export const useLspStore = create<LspState>((set, get) => ({
     for (const timer of changeTimers.values()) clearTimeout(timer);
     changeTimers.clear();
     initializedLanguages.clear();
+    resetIndexingTracking();
     sessionPromises.clear();
-    rejectAllSessions(new Error('LSPワークスペースを変更しました'));
-    set({ status: 'starting', rootUri: null, readyLanguage: null, serverVersion: null, errorMessage: null });
+    rejectAllSessions(new Error('LSP workspace changed'));
+    set({
+      status: 'starting',
+      rootUri: null,
+      readyLanguage: null,
+      serverVersion: null,
+      indexing: false,
+      indexingLanguage: null,
+      indexingMessage: null,
+      indexingProgress: null,
+      errorMessage: null,
+    });
 
     // Open sessions sequentially so the host can finish tearing down the old
     // root before the next language server is started.
@@ -483,7 +714,7 @@ export const useLspStore = create<LspState>((set, get) => ({
   },
 
   ensureSession: (language = 'rust') => {
-    if (!isLspLanguage(language)) return Promise.reject(new Error(`未対応のLSP言語: ${language}`));
+    if (!isLspLanguage(language)) return Promise.reject(new Error(`Unsupported LSP language: ${language}`));
     activeLanguages.add(language);
     if (initializedLanguages.has(language)) return Promise.resolve();
     return openLanguageSession(language, get().workspaceRootOverride, set);

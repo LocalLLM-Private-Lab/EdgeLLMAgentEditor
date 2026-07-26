@@ -114,29 +114,32 @@
   cursor: pointer;
 }
 
-/* monaco-vim's own toggleVisibility() sets `node.style.display = 'block'`
- * as an *inline* style whenever it (re)shows the status node, which beats
- * any plain .status-bar-badge{display:flex} rule regardless of specificity
- * — the mode text ends up laid out as ordinary block/inline content
- * instead of centered, reading as top-aligned. !important is the only way
- * to reliably win against a style monaco-vim re-applies at runtime. */
+/* Keep the outer badge's layout independent from the inner node that
+ * monaco-vim toggles with inline display styles. */
 .status-bar-keybinding {
   cursor: default;
   display: flex !important;
   align-items: center !important;
   justify-content: center;
+  gap: 5px;
   line-height: normal;
   font-weight: 700;
   letter-spacing: 0.4px;
 }
 
-.status-bar-keybinding span {
+.status-bar-keybinding-label {
   display: inline-flex;
   align-items: center;
   line-height: normal;
 }
 
-.status-bar-keybinding span:empty {
+.status-bar-keybinding-node {
+  display: inline-flex;
+  align-items: center;
+  line-height: normal;
+}
+
+.status-bar-keybinding-node:empty {
   display: none;
 }
 

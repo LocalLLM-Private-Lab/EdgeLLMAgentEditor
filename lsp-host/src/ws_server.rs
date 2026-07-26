@@ -412,10 +412,10 @@ fn gem_user_bin(executable: &str) -> anyhow::Result<PathBuf> {
 fn auto_install_description(spec: AutoInstall) -> String {
     match spec {
         AutoInstall::Npm { packages, .. } => {
-            format!("npmで {} をユーザー領域へ導入中", packages.join(", "))
+            format!("Installing {} to the user area with npm", packages.join(", "))
         }
-        AutoInstall::Gem { package, .. } => format!("RubyGemsで {package} をユーザー領域へ導入中"),
-        AutoInstall::Clangd => "clangdを利用可能なOSパッケージマネージャーから導入中".into(),
+        AutoInstall::Gem { package, .. } => format!("Installing {package} to the user area with RubyGems"),
+        AutoInstall::Clangd => "Installing clangd with an available OS package manager".into(),
     }
 }
 
@@ -427,7 +427,7 @@ fn installed_program(spec: AutoInstall) -> anyhow::Result<PathBuf> {
                 if executable == "typescript-language-server"
                     && !user_typescript_tsserver_path().is_file()
                 {
-                    anyhow::bail!("ユーザー領域のTypeScriptにtsserver.jsがありません")
+                    anyhow::bail!("tsserver.js is missing from the user-area TypeScript installation")
                 }
                 return Ok(local);
             }
@@ -511,10 +511,10 @@ fn install_clangd() -> anyhow::Result<()> {
     }
 
     if cfg!(target_os = "linux") {
-        anyhow::bail!("clangdが見つかりません。apt/dnf/pacman等でclangdを導入してください")
+        anyhow::bail!("clangd was not found. Install it with apt, dnf, pacman, or another package manager")
     }
     anyhow::bail!(
-        "clangdを自動導入できません。winget/scoop/choco(Windows)またはbrew(macOS)を用意してください。{}",
+        "Could not install clangd automatically. Install winget/scoop/choco (Windows) or brew (macOS).{}",
         if errors.is_empty() {
             String::new()
         } else {
@@ -639,7 +639,7 @@ async fn ensure_language_server_session(
                 Ok(()) => {
                     let program = installed_program(spec).map_err(|err| {
                         anyhow::anyhow!(
-                            "インストール後に{}を見つけられません: {err}",
+                            "Could not find {} after installation: {err}",
                             candidate.program
                         )
                     })?;
@@ -654,12 +654,12 @@ async fn ensure_language_server_session(
                         Err(err) => errors.push(format!("{}: {err}", candidate.program)),
                     }
                 }
-                Err(err) => errors.push(format!("自動導入: {err}")),
+                Err(err) => errors.push(format!("Automatic installation: {err}")),
             }
         }
     }
     anyhow::bail!(
-        "No language server found for {language}. PATH上のサーバーを導入するか、自動導入に必要なパッケージマネージャーを用意してください. {}",
+        "No language server found for {language}. Install one on PATH or provide a package manager for automatic installation. {}",
         errors.join("; ")
     )
 }
@@ -712,7 +712,7 @@ async fn handle_socket(socket: WebSocket, active_connections: Arc<AtomicUsize>) 
                     .unwrap_or_else(default_root_dir);
                 if !requested_root.is_dir() {
                     let _ = out_tx.send(ServerMessage::Error {
-                        message: format!("フォルダが見つかりません: {}", requested_root.display()),
+                        message: format!("Workspace folder not found: {}", requested_root.display()),
                     });
                     continue;
                 }

@@ -16,6 +16,10 @@ function LspBadge({ activeLanguage }: { activeLanguage: string | null }) {
   const fetchProgress = useLspStore((s) => s.fetchProgress);
   const installLanguage = useLspStore((s) => s.installLanguage);
   const installMessage = useLspStore((s) => s.installMessage);
+  const indexing = useLspStore((s) => s.indexing);
+  const indexingLanguage = useLspStore((s) => s.indexingLanguage);
+  const indexingMessage = useLspStore((s) => s.indexingMessage);
+  const indexingProgress = useLspStore((s) => s.indexingProgress);
   const errorMessage = useLspStore((s) => s.errorMessage);
   const rootUri = useLspStore((s) => s.rootUri);
   const serverVersion = useLspStore((s) => s.serverVersion);
@@ -38,10 +42,10 @@ function LspBadge({ activeLanguage }: { activeLanguage: string | null }) {
       void setWorkspaceRootOverride(result.path);
     } else if (result.status === 'unavailable') {
       setPickMessage(
-        `lsp-hostが未登録です。lsp-host/install-native-messaging-host.bat を一度実行してください。(${result.message})`,
+        `lsp-host is not registered. Run lsp-host/install-native-messaging-host.bat once. (${result.message})`,
       );
     } else if (result.status === 'timeout') {
-      setPickMessage('応答がありません。');
+      setPickMessage('No response.');
     } else if (result.status === 'error') {
       setPickMessage(result.message);
     }
@@ -58,16 +62,18 @@ function LspBadge({ activeLanguage }: { activeLanguage: string | null }) {
     status === 'ready' ? 'codicon-check' : status === 'error' ? 'codicon-warning' : 'codicon-sync';
   const label =
     status === 'ready'
-      ? `LSP${(activeLanguage ?? readyLanguage) ? ` (${activeLanguage ?? readyLanguage})` : ''}`
+      ? indexing
+        ? 'LSP Indexing...'
+        : `LSP${(activeLanguage ?? readyLanguage) ? ` (${activeLanguage ?? readyLanguage})` : ''}`
       : status === 'error'
-        ? 'LSP エラー'
+        ? 'LSP Error'
         : status === 'fetching'
           ? fetchProgress?.total
-            ? `取得中 ${Math.round((fetchProgress.downloaded / fetchProgress.total) * 100)}%`
-            : '取得中...'
+            ? `Fetching ${Math.round((fetchProgress.downloaded / fetchProgress.total) * 100)}%`
+            : 'Fetching...'
           : status === 'installing'
-            ? `${installLanguage ?? 'LSP'} を準備中...`
-          : 'LSP 起動中...';
+            ? `${installLanguage ?? 'LSP'} Installing...`
+            : 'LSP Starting...';
 
   return (
     <div className="status-bar-item-wrapper">
@@ -78,24 +84,30 @@ function LspBadge({ activeLanguage }: { activeLanguage: string | null }) {
           setOpen((cur) => !cur);
         }}
       >
-        <span className={`codicon ${icon}${status !== 'ready' && status !== 'error' ? ' status-bar-lsp-spin' : ''}`} />
+        <span className={`codicon ${icon}${(status !== 'ready' && status !== 'error') || indexing ? ' status-bar-lsp-spin' : ''}`} />
         {label}
       </button>
       {open && (
         <div className="status-bar-dropdown" onClick={(e) => e.stopPropagation()}>
-          <div className="status-bar-dropdown-heading">言語サーバー</div>
-          <div className="status-bar-dropdown-detail">状態: {status}</div>
-          {serverVersion && <div className="status-bar-dropdown-detail">バージョン: {serverVersion}</div>}
+          <div className="status-bar-dropdown-heading">Language Server</div>
+          <div className="status-bar-dropdown-detail">Status: {status}</div>
+          {serverVersion && <div className="status-bar-dropdown-detail">Version: {serverVersion}</div>}
           {rootUri && <div className="status-bar-dropdown-detail">root: {rootUri}</div>}
           {installMessage && <div className="status-bar-dropdown-detail">{installMessage}</div>}
+          {indexing && (
+            <div className="status-bar-dropdown-detail">
+              Indexing{indexingLanguage ? ` (${indexingLanguage})` : ''}: {indexingMessage ?? 'Analyzing workspace...'}
+              {indexingProgress !== null ? ` (${Math.round(indexingProgress)}%)` : ''}
+            </div>
+          )}
           {errorMessage && <div className="status-bar-dropdown-detail status-bar-dropdown-detail-error">{errorMessage}</div>}
-          <div className="status-bar-dropdown-heading">ワークスペースルートを指定</div>
+          <div className="status-bar-dropdown-heading">Workspace Root</div>
           <div className="status-bar-dropdown-detail status-bar-lsp-root-hint">
-            ブラウザはフォルダの実パスを取得できないため、lsp-hostが自動選択したフォルダが実際のプロジェクトと違う場合はここで指定してください。
+            The browser cannot resolve folder paths. If the lsp-host-selected folder is not your project, specify the project root here.
           </div>
           <div className="status-bar-lsp-root-form">
             <button type="button" onClick={() => void handlePickFolder()} disabled={picking}>
-              {picking ? '選択中...' : 'フォルダを選択...'}
+              {picking ? 'Selecting...' : 'Choose Folder...'}
             </button>
           </div>
           {pickMessage && (
@@ -112,9 +124,9 @@ function LspBadge({ activeLanguage }: { activeLanguage: string | null }) {
               className="status-bar-lsp-root-input"
               value={rootInput}
               onChange={(e) => setRootInput(e.target.value)}
-              placeholder="例: C:\Users\me\my-project"
+              placeholder="e.g. C:\Users\me\my-project"
             />
-            <button type="submit">適用</button>
+            <button type="submit">Apply</button>
           </form>
         </div>
       )}
@@ -198,6 +210,7 @@ export function StatusBar() {
   const openFiles = useEditorTabsStore((s) => s.openFiles);
   const activeFileId = useEditorTabsStore((s) => s.activeFileId);
   const activeTab = openFiles.find((f) => f.id === activeFileId);
+  const keybindingLabel = mode === 'vim' ? '[Vim]' : mode === 'emacs' ? '[Emacs]' : '[Default]';
 
   const keybindingStatusRef = useRef<HTMLDivElement | null>(null);
 
@@ -210,10 +223,11 @@ export function StatusBar() {
     <footer className="status-bar" data-vim-mode={vimSubMode ?? undefined}>
       <div className="status-bar-left">
         <div
-          ref={keybindingStatusRef}
           className="status-bar-badge status-bar-badge-point-right status-bar-keybinding"
-          style={{ display: mode === 'default' ? 'none' : undefined }}
-        />
+        >
+          <span className="status-bar-keybinding-label">{keybindingLabel}</span>
+          <div ref={keybindingStatusRef} className="status-bar-keybinding-node" />
+        </div>
         <span className="status-bar-segment status-bar-segment-static">
           <span className="codicon codicon-folder" />
           {status === 'connected' ? rootHandleName || '(workspace)' : 'フォルダが開かれていません'}

@@ -528,13 +528,21 @@ export function MonacoEditorPane({ groupId }: { groupId: string }) {
     activeBindingRef.current?.dispose();
     activeBindingRef.current = null;
 
+    // Vim toggles this node's inline display style, while Emacs writes its
+    // transient key sequence directly into the same node. Reset both when
+    // changing keybinding modes so neither leaks into the next mode.
+    const statusNode = getKeybindingStatusNode();
+    if (statusNode) {
+      statusNode.textContent = '';
+      statusNode.style.display = '';
+    }
+
     const doSave = () => {
       const id = useEditorTabsStore.getState().groups[groupId]?.activeFileId;
       if (id) void saveFile(id);
     };
 
     if (keybindingMode === 'vim') {
-      const statusNode = getKeybindingStatusNode();
       const vimAdapter = initVimMode(editor, statusNode, BadgeVimStatusBar);
       // Route vim's native save commands through the app's real save path
       // (FSA write + dirty-flag clear) instead of a no-op/localStorage stub.
@@ -562,7 +570,6 @@ export function MonacoEditorPane({ groupId }: { groupId: string }) {
       };
     } else if (keybindingMode === 'emacs') {
       const emacsMode = new EmacsExtension(editor);
-      const statusNode = getKeybindingStatusNode();
       const disposables: monaco.IDisposable[] = [];
       if (statusNode) {
         statusNode.textContent = '';

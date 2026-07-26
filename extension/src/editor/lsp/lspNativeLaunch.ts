@@ -46,7 +46,7 @@ export function launchLspHostViaNativeMessaging(): Promise<LspNativeLaunchResult
         resolve(response as LspNativeLaunchResult);
         return;
       }
-      resolve({ status: 'error', message: response?.message ?? '不明なエラー' });
+      resolve({ status: 'error', message: response?.message ?? 'Unknown error' });
     });
   });
 }
@@ -96,7 +96,7 @@ export function pickLspWorkspaceFolder(): Promise<LspPickFolderResult> {
         resolve(response as LspPickFolderResult);
         return;
       }
-      resolve({ status: 'error', message: response?.message ?? '不明なエラー' });
+      resolve({ status: 'error', message: response?.message ?? 'Unknown error' });
     });
   });
 }

@@ -412,9 +412,14 @@ fn gem_user_bin(executable: &str) -> anyhow::Result<PathBuf> {
 fn auto_install_description(spec: AutoInstall) -> String {
     match spec {
         AutoInstall::Npm { packages, .. } => {
-            format!("Installing {} to the user area with npm", packages.join(", "))
+            format!(
+                "Installing {} to the user area with npm",
+                packages.join(", ")
+            )
         }
-        AutoInstall::Gem { package, .. } => format!("Installing {package} to the user area with RubyGems"),
+        AutoInstall::Gem { package, .. } => {
+            format!("Installing {package} to the user area with RubyGems")
+        }
         AutoInstall::Clangd => "Installing clangd with an available OS package manager".into(),
     }
 }
@@ -427,7 +432,9 @@ fn installed_program(spec: AutoInstall) -> anyhow::Result<PathBuf> {
                 if executable == "typescript-language-server"
                     && !user_typescript_tsserver_path().is_file()
                 {
-                    anyhow::bail!("tsserver.js is missing from the user-area TypeScript installation")
+                    anyhow::bail!(
+                        "tsserver.js is missing from the user-area TypeScript installation"
+                    )
                 }
                 return Ok(local);
             }
@@ -511,7 +518,9 @@ fn install_clangd() -> anyhow::Result<()> {
     }
 
     if cfg!(target_os = "linux") {
-        anyhow::bail!("clangd was not found. Install it with apt, dnf, pacman, or another package manager")
+        anyhow::bail!(
+            "clangd was not found. Install it with apt, dnf, pacman, or another package manager"
+        )
     }
     anyhow::bail!(
         "Could not install clangd automatically. Install winget/scoop/choco (Windows) or brew (macOS).{}",
@@ -712,7 +721,10 @@ async fn handle_socket(socket: WebSocket, active_connections: Arc<AtomicUsize>) 
                     .unwrap_or_else(default_root_dir);
                 if !requested_root.is_dir() {
                     let _ = out_tx.send(ServerMessage::Error {
-                        message: format!("Workspace folder not found: {}", requested_root.display()),
+                        message: format!(
+                            "Workspace folder not found: {}",
+                            requested_root.display()
+                        ),
                     });
                     continue;
                 }

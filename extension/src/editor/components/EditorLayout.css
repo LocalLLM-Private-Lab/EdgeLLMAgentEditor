@@ -1,0 +1,55 @@
+.editor-layout-root {
+  flex: 1;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+}
+
+.editor-layout-root > * {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.editor-layout-split {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.editor-layout-split-row {
+  flex-direction: row;
+}
+
+.editor-layout-split-column {
+  flex-direction: column;
+}
+
+.editor-layout-pane {
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.editor-layout-pane > * {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+}
+
+.editor-layout-divider {
+  flex-shrink: 0;
+  background: var(--border-color);
+}
+
+.editor-layout-divider-row {
+  width: 4px;
+  cursor: col-resize;
+}
+
+.editor-layout-divider-column {
+  height: 4px;
+  cursor: row-resize;
+}

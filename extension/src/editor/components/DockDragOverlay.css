@@ -1,0 +1,31 @@
+/* Sits above absolutely everything (panels, sidebar, editor) while a drag
+ * is in progress — position:fixed + a z-index no other layer in the app
+ * uses, so the single indicator it renders can never end up hidden behind
+ * panel content the way the old per-element overlays could. Pointer events
+ * pass through it; the tab being dragged holds pointer capture itself, so
+ * this element never needs to receive input. */
+.dock-drag-indicator {
+  position: fixed;
+  z-index: 9999;
+  pointer-events: none;
+  background: color-mix(in srgb, var(--accent-color) 35%, transparent);
+  border: 2px solid var(--accent-color);
+}
+
+/* Follows the cursor, offset down-right of it like a native OS drag image
+ * (sitting exactly under the pointer would hide it under the cursor
+ * glyph itself). */
+.dock-drag-ghost {
+  position: fixed;
+  z-index: 10000;
+  pointer-events: none;
+  transform: translate(14px, 14px);
+  background: var(--panel-bg);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.35);
+  padding: 4px 10px;
+  font-size: 12px;
+  opacity: 0.9;
+  white-space: nowrap;
+}

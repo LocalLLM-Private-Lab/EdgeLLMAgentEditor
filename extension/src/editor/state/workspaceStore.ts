@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import type { FileTreeNode } from '../../shared/types';
 import {
+  copyDirectoryContents,
+  copyFileEntry,
   createFileEntry,
   createFolderEntry,
   pickWorkspaceFolder,
@@ -9,6 +11,7 @@ import {
   renameDirectoryEntry,
   renameFileEntry,
   requestReadWritePermission,
+  uniqueEntryName,
 } from '../fs/fsaWorkspace';
 import { loadChildren } from '../fs/fileTreeLoader';
 import {
@@ -44,11 +47,23 @@ interface WorkspaceState {
   openFolder: () => Promise<void>;
   restoreFromLastSession: () => Promise<void>;
   reconnect: () => Promise<void>;
+  /** Returns to the empty state and forgets the saved handle, so it isn't
+   * auto-restored on next launch — closes every open tab too, since they
+   * all belong to the folder being closed. */
+  closeFolder: () => Promise<void>;
   toggleExpand: (node: FileTreeNode) => Promise<void>;
+  /** Re-lists one directory's children in place (leaving the rest of the
+   * tree/expanded state untouched) — for callers that created a file
+   * through a raw FileSystemDirectoryHandle call rather than createFile(),
+   * e.g. the Copilot plan flow creating a new file at an arbitrary path. */
+  refreshDirectoryAt: (dirHandle: FileSystemDirectoryHandle, dirPathSegments: string[]) => Promise<void>;
   createFile: (target: DirectoryTarget | null, name: string) => Promise<void>;
   createFolder: (target: DirectoryTarget | null, name: string) => Promise<void>;
   renameEntry: (node: FileTreeNode, newName: string) => Promise<void>;
   deleteEntry: (node: FileTreeNode) => Promise<void>;
+  /** Copies `source` into `target` (or the workspace root if null), under
+   * a collision-safe name — used by the explorer's Ctrl+C/Ctrl+V. */
+  copyEntry: (source: FileTreeNode, target: DirectoryTarget | null) => Promise<void>;
 }
 
 async function buildRootTree(handle: FileSystemDirectoryHandle): Promise<FileTreeNode[]> {
@@ -64,9 +79,15 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   openFolder: async () => {
     try {
       const handle = await pickWorkspaceFolder();
-      await saveWorkspaceHandle(handle);
       const tree = await buildRootTree(handle);
       set({ rootHandle: handle, status: 'connected', tree, errorMessage: null });
+      // Best-effort only — losing "restore on next launch" (e.g. IndexedDB
+      // unavailable) shouldn't block using the folder for this session.
+      try {
+        await saveWorkspaceHandle(handle);
+      } catch {
+        // ignore
+      }
     } catch (err) {
       if (err instanceof DOMException && err.name === 'AbortError') return;
       set({ status: 'error', errorMessage: (err as Error).message });
@@ -88,6 +109,18 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     }
   },
 
+  closeFolder: async () => {
+    useEditorTabsStore.getState().closeFilesByPathPrefix([]);
+    set({ rootHandle: null, status: 'empty', tree: [], errorMessage: null });
+    // Best-effort only — same reasoning as openFolder's save: forgetting to
+    // un-remember this folder for next launch shouldn't block closing it now.
+    try {
+      await clearSavedWorkspaceHandle();
+    } catch {
+      // ignore
+    }
+  },
+
   reconnect: async () => {
     const { rootHandle } = get();
     if (!rootHandle) return;
@@ -105,10 +138,15 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     }
   },
 
+  refreshDirectoryAt: async (dirHandle, dirPathSegments) => {
+    await refreshDirectory(set, dirHandle, dirPathSegments);
+  },
+
   toggleExpand: async (node: FileTreeNode) => {
     if (node.kind !== 'directory') return;
     if (node.childrenLoaded) {
-      updateNode(set, node.id, (n) => ({ ...n, children: n.children }));
+      // Collapse — children stay cached so re-expanding doesn't re-fetch.
+      updateNode(set, node.id, (n) => ({ ...n, childrenLoaded: false }));
       return;
     }
     const children = await loadChildren(
@@ -170,6 +208,24 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
       await removeFsEntry(node.parentHandle, node.name, node.kind === 'directory');
       useEditorTabsStore.getState().closeFilesByPathPrefix(node.pathSegments);
       await refreshDirectory(set, node.parentHandle, node.pathSegments.slice(0, -1));
+    } catch (err) {
+      set({ errorMessage: (err as Error).message });
+      throw err;
+    }
+  },
+
+  copyEntry: async (source, target) => {
+    const { rootHandle } = get();
+    if (!rootHandle) return;
+    try {
+      const destHandle = target ? target.handle : rootHandle;
+      const destName = await uniqueEntryName(destHandle, source.name);
+      if (source.kind === 'file') {
+        await copyFileEntry(source.handle as FileSystemFileHandle, destHandle, destName);
+      } else {
+        await copyDirectoryContents(source.handle as FileSystemDirectoryHandle, destHandle, destName);
+      }
+      await refreshDirectory(set, destHandle, target ? target.pathSegments : []);
     } catch (err) {
       set({ errorMessage: (err as Error).message });
       throw err;

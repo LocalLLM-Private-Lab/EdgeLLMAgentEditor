@@ -1,0 +1,65 @@
+.plan-step-card {
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--editor-bg);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.plan-step-card.active {
+  border-color: var(--accent-color);
+  box-shadow: 0 0 0 1px var(--accent-color);
+}
+
+.plan-step-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.plan-step-collapse-icon {
+  opacity: 0.6;
+  font-size: 9px;
+  width: 10px;
+}
+
+.plan-step-index {
+  opacity: 0.6;
+}
+
+.plan-step-description {
+  flex: 1;
+}
+
+.plan-step-status {
+  font-size: 10px;
+  padding: 2px 6px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+.plan-step-status-icon {
+  margin-right: 3px;
+}
+
+.plan-step-status-pending {
+  background: var(--panel-bg);
+  border-color: var(--border-color);
+}
+
+.plan-step-status-in-progress {
+  background: var(--warning-bg);
+  color: var(--warning-fg);
+  border-color: var(--warning-border);
+}
+
+.plan-step-status-done {
+  background: var(--success-bg);
+  color: var(--success-fg);
+  border-color: var(--success-border);
+}

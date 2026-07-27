@@ -1,0 +1,122 @@
+.plan-panel {
+  height: 100%;
+  display: flex;
+  flex-direction: row;
+  overflow: hidden;
+}
+
+/* Left-side outline: 1 (create plan) / 2 (import plan) / 3-N (each step)
+   — click jumps to (and, for steps, expands) that part of .plan-panel-body.
+   Its own scroll region, independent of the body's, so it stays reachable
+   even with many steps. */
+.plan-outline {
+  width: 56px;
+  flex-shrink: 0;
+  overflow-y: auto;
+  padding: 8px 4px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border-right: 1px solid var(--border-color);
+}
+
+.plan-outline-item {
+  padding: 4px 2px;
+  border-radius: var(--radius-sm);
+  border: none;
+  background: none;
+  color: inherit;
+  cursor: pointer;
+  font-family: monospace;
+  font-size: 11px;
+  text-align: center;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.plan-outline-item:hover {
+  background: var(--row-hover-bg);
+}
+
+.plan-outline-item.step {
+  opacity: 0.75;
+}
+
+.plan-outline-item.step.done {
+  opacity: 0.45;
+  text-decoration: line-through;
+}
+
+.plan-outline-item.step.in-progress {
+  opacity: 1;
+  color: var(--accent-color);
+  font-weight: 600;
+}
+
+/* "Where you are right now" — driven by scroll-spy as well as clicks, so
+   this reflects whatever's actually in view, not just the last click. */
+.plan-outline-item.active {
+  opacity: 1;
+  background: var(--row-hover-bg);
+  box-shadow: inset 2px 0 0 var(--accent-color);
+  font-weight: 600;
+}
+
+.plan-outline-toggle {
+  padding: 4px 2px;
+  margin-bottom: 4px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-color);
+  background: var(--editor-bg);
+  color: inherit;
+  cursor: pointer;
+  font-size: 12px;
+  text-align: center;
+}
+
+.plan-outline-toggle:hover {
+  background: var(--row-hover-bg);
+}
+
+.plan-outline-toggle.active {
+  background: var(--accent-color);
+  border-color: var(--accent-color);
+  color: var(--accent-fg);
+}
+
+.plan-panel-body {
+  flex: 1;
+  min-width: 0;
+  overflow-y: auto;
+  /* No top padding here on purpose: a scrolling container's *start*
+     padding stops reserving space once scrolled past, which would let
+     content peek above a position:sticky child positioned at top:0.
+     The same visual gap is recreated below via the sticky bar's own
+     margin-top instead, which doesn't have that quirk. */
+  padding: 0 8px 8px 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.plan-progress-track {
+  display: flex;
+  gap: 3px;
+  flex-shrink: 0;
+}
+
+.plan-progress-seg {
+  width: 16px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--border-color);
+}
+
+.plan-progress-seg-done {
+  background: var(--success-fg);
+}
+
+.plan-progress-seg-in-progress {
+  background: var(--accent-color);
+}

@@ -5,6 +5,7 @@ import {
 } from '../terminal/wsTerminalClient';
 import type { ClientMessage, ServerMessage } from '../terminal/terminalProtocol';
 import { getStoredValue, setStoredValue } from '../../shared/chromeStorage';
+import { launchTerminalHostViaNativeMessaging } from '../terminal/nativeLaunch';
 
 export interface TerminalHostSettings {
   port: number;
@@ -12,6 +13,17 @@ export interface TerminalHostSettings {
 }
 
 const SETTINGS_STORAGE_KEY = 'terminalHostSettings';
+
+/** A command to run in a brand-new, labeled terminal session — unlike
+ * `pendingRunRequest` (which types into whatever session is currently
+ * active), this always opens a fresh one so the caller can correlate its
+ * own output/exit code via the returned session id without any risk of
+ * picking up unrelated output the user happens to be typing elsewhere. */
+export interface PendingCaptureRun {
+  command: string;
+  label: string;
+  onSessionOpened: (sessionId: string) => void;
+}
 
 interface TerminalState {
   settings: TerminalHostSettings | null;
@@ -25,14 +37,29 @@ interface TerminalState {
    * "something to do with a terminal session", not a command-template
    * concern. */
   pendingRunRequest: string | null;
+  /** One-shot request for a fresh, labeled, capture-friendly session — see
+   * `PendingCaptureRun`. Consumed by TerminalPanel exactly like
+   * `pendingRunRequest`, just always opening a new session instead of
+   * reusing the active one. */
+  pendingCaptureRun: PendingCaptureRun | null;
   loadSettings: () => Promise<void>;
   saveSettings: (settings: TerminalHostSettings) => Promise<void>;
+  /** Tries to auto-launch (or find the already-running) terminal-host via
+   * Native Messaging and connect with the port/token it hands back — no
+   * manual "start it yourself and paste the port/token" step, matching
+   * lsp-host's flow. Falls back to whatever settings were last saved
+   * manually if native messaging isn't available (host not registered
+   * yet, or a platform without one) — the manual form stays as a backstop,
+   * it just isn't the primary path anymore. */
+  ensureConnected: () => Promise<void>;
   connect: () => void;
   disconnect: () => void;
   send: (msg: ClientMessage) => void;
   subscribe: (listener: (msg: ServerMessage) => void) => () => void;
   queueRunRequest: (command: string) => void;
   consumePendingRunRequest: () => string | null;
+  queueCaptureRun: (command: string, label: string, onSessionOpened: (sessionId: string) => void) => void;
+  consumePendingCaptureRun: () => PendingCaptureRun | null;
 }
 
 export const useTerminalStore = create<TerminalState>((set, get) => ({
@@ -41,6 +68,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   client: null,
   listeners: new Set(),
   pendingRunRequest: null,
+  pendingCaptureRun: null,
 
   loadSettings: async () => {
     const settings = await getStoredValue<TerminalHostSettings>(SETTINGS_STORAGE_KEY);
@@ -50,6 +78,17 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
   saveSettings: async (settings: TerminalHostSettings) => {
     await setStoredValue(SETTINGS_STORAGE_KEY, settings);
     set({ settings });
+  },
+
+  ensureConnected: async () => {
+    const result = await launchTerminalHostViaNativeMessaging();
+    if (result.status === 'started' || result.status === 'already_running') {
+      await get().saveSettings({ port: result.port, token: result.token });
+      get().connect();
+      return;
+    }
+    await get().loadSettings();
+    if (get().settings) get().connect();
   },
 
   connect: () => {
@@ -89,5 +128,24 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     const cmd = get().pendingRunRequest;
     set({ pendingRunRequest: null });
     return cmd;
+  },
+
+  queueCaptureRun: (command, label, onSessionOpened) => {
+    if (get().pendingCaptureRun) {
+      // Two capture-runs queued before the first one's been picked up by
+      // TerminalPanel (should only happen within the same render tick,
+      // e.g. two triggers firing back-to-back) — last one wins, but warn
+      // since the dropped request's caller will otherwise hang forever
+      // waiting for a session id that never arrives.
+      // eslint-disable-next-line no-console
+      console.warn('terminalStore: pendingCaptureRun overwritten before it was consumed');
+    }
+    set({ pendingCaptureRun: { command, label, onSessionOpened } });
+  },
+
+  consumePendingCaptureRun: () => {
+    const req = get().pendingCaptureRun;
+    set({ pendingCaptureRun: null });
+    return req;
   },
 }));

@@ -19,6 +19,11 @@ export async function readFileText(handle: FileSystemFileHandle): Promise<string
   return file.text();
 }
 
+export async function readFileBytes(handle: FileSystemFileHandle): Promise<Uint8Array<ArrayBuffer>> {
+  const file = await handle.getFile();
+  return new Uint8Array(await file.arrayBuffer());
+}
+
 export async function getFileLastModified(handle: FileSystemFileHandle): Promise<number> {
   const file = await handle.getFile();
   return file.lastModified;
@@ -31,6 +36,18 @@ export async function writeFileText(
   const writable = await handle.createWritable();
   try {
     await writable.write(contents);
+  } finally {
+    await writable.close();
+  }
+}
+
+export async function writeFileBytes(
+  handle: FileSystemFileHandle,
+  bytes: Uint8Array<ArrayBuffer>,
+): Promise<void> {
+  const writable = await handle.createWritable();
+  try {
+    await writable.write(bytes);
   } finally {
     await writable.close();
   }
@@ -83,7 +100,40 @@ export async function renameFileEntry(
   await handle.move(newName);
 }
 
-async function copyFileEntry(
+/** Copy-paste in place (same folder) or onto an existing name must not
+ * silently overwrite — appends " (2)", " (3)", ... like a typical file
+ * manager, trying the plain name first. */
+export async function uniqueEntryName(
+  dir: FileSystemDirectoryHandle,
+  desiredName: string,
+): Promise<string> {
+  const exists = async (name: string): Promise<boolean> => {
+    try {
+      await dir.getFileHandle(name);
+      return true;
+    } catch {
+      // fall through to directory check
+    }
+    try {
+      await dir.getDirectoryHandle(name);
+      return true;
+    } catch {
+      return false;
+    }
+  };
+
+  if (!(await exists(desiredName))) return desiredName;
+
+  const dotIndex = desiredName.lastIndexOf('.');
+  const base = dotIndex > 0 ? desiredName.slice(0, dotIndex) : desiredName;
+  const ext = dotIndex > 0 ? desiredName.slice(dotIndex) : '';
+  for (let i = 2; ; i++) {
+    const candidate = `${base} (${i})${ext}`;
+    if (!(await exists(candidate))) return candidate;
+  }
+}
+
+export async function copyFileEntry(
   source: FileSystemFileHandle,
   dest: FileSystemDirectoryHandle,
   name: string,
@@ -102,7 +152,7 @@ async function copyFileEntry(
  * named `destName` under `destParent`. Sibling entries within a directory
  * are independent I/O, so they copy concurrently; only descending into a
  * subdirectory is sequenced after its own destination folder is created. */
-async function copyDirectoryContents(
+export async function copyDirectoryContents(
   source: FileSystemDirectoryHandle,
   destParent: FileSystemDirectoryHandle,
   destName: string,

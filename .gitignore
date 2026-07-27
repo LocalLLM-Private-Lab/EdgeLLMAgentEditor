@@ -1,6 +1,10 @@
 # Rust
 terminal-host/target
 terminal-host/**/*.pdb
+terminal-host/native-messaging-host-manifest.json
+lsp-host/target
+lsp-host/**/*.pdb
+lsp-host/native-messaging-host-manifest.json
 
 # OS
 .DS_Store

@@ -30,33 +30,44 @@ export function TerminalPanel() {
   const settings = useTerminalStore((s) => s.settings);
   const connectionState = useTerminalStore((s) => s.connectionState);
   const saveSettings = useTerminalStore((s) => s.saveSettings);
+  const connect = useTerminalStore((s) => s.connect);
   const send = useTerminalStore((s) => s.send);
   const subscribe = useTerminalStore((s) => s.subscribe);
 
   const pendingRunRequest = useTerminalStore((s) => s.pendingRunRequest);
   const consumePendingRunRequest = useTerminalStore((s) => s.consumePendingRunRequest);
+  const pendingCaptureRun = useTerminalStore((s) => s.pendingCaptureRun);
+  const consumePendingCaptureRun = useTerminalStore((s) => s.consumePendingCaptureRun);
 
   const hostRef = useRef<HTMLDivElement | null>(null);
   const sessionsRef = useRef<Map<string, Session>>(new Map());
   const [sessionIds, setSessionIds] = useState<string[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+  // Kept separate from sessionsRef (a plain ref, only used for DOM/xterm
+  // plumbing) since the tab strip needs a reactive value to actually
+  // re-render when a Copilot-triggered run's session gets a distinct label
+  // instead of the generic "ターミナル".
+  const [sessionLabels, setSessionLabels] = useState<Record<string, string>>({});
 
   const [portInput, setPortInput] = useState(String(DEFAULT_TERMINAL_HOST_PORT));
   const [tokenInput, setTokenInput] = useState('');
   const [commandInput, setCommandInput] = useState('');
   const [launchMessage, setLaunchMessage] = useState<string | null>(null);
 
-  // The existing auto-reconnect loop in wsTerminalClient.ts retries every
-  // 2s regardless — this just gives the browser-launched terminal-host a
-  // moment to come up, and it gets picked up on the next retry with no
-  // extra wiring needed here.
+  // App.tsx already tries this once automatically on startup
+  // (ensureConnected) — this is the manual retry for when that didn't
+  // pan out (host not registered yet, was closed since, etc.). Saves the
+  // fresh port/token itself and connects immediately rather than just
+  // hoping wsTerminalClient's own reconnect loop happens to pick it up.
   async function handleLaunchHost() {
     setLaunchMessage('起動しています...');
     const result = await launchTerminalHostViaNativeMessaging();
-    if (result.status === 'started') {
-      setLaunchMessage('起動しました。接続を待っています...');
-    } else if (result.status === 'already_running') {
-      setLaunchMessage('既に起動しています。接続を待っています...');
+    if (result.status === 'started' || result.status === 'already_running') {
+      await saveSettings({ port: result.port, token: result.token });
+      connect();
+      setLaunchMessage(
+        result.status === 'started' ? '起動しました。接続しています...' : '既に起動しています。接続しています...',
+      );
     } else if (result.status === 'unavailable') {
       setLaunchMessage(
         '未登録です。terminal-host/install-native-messaging-host.bat を一度実行してください。',
@@ -69,9 +80,6 @@ export function TerminalPanel() {
       setLaunchMessage(`起動に失敗しました: ${result.message}`);
     }
   }
-
-  // loadSettings()/connect() run once at the App level (App.tsx) so the
-  // terminal host is already connected by the time this panel is opened.
 
   // Route incoming server messages to the matching session's xterm instance.
   useEffect(() => {
@@ -94,8 +102,9 @@ export function TerminalPanel() {
   // launch directory by default (see terminal-host/src/pty_session.rs).
   // Run it from inside your project folder and it just works there, with
   // no folder picker or path entry needed on this side.
-  function openSession(): string {
+  function openSession(label?: string): string {
     const id = uuid();
+    if (label) setSessionLabels((prev) => ({ ...prev, [id]: label }));
     if (!hostRef.current) return id;
     const container = document.createElement('div');
     container.className = 'terminal-session-container';
@@ -110,6 +119,43 @@ export function TerminalPanel() {
     term.loadAddon(fit);
     term.open(container);
     fit.fit();
+
+    async function pasteFromClipboard() {
+      const text = await navigator.clipboard.readText();
+      if (!text) return;
+      send({ type: 'stdin', session_id: id, data: bytesToBase64(new TextEncoder().encode(text)) });
+    }
+
+    // VS Code's own terminal default on Windows: Ctrl+C copies the current
+    // selection if there is one, otherwise it falls through to xterm's
+    // normal behavior (sends \x03 / SIGINT to the PTY). Ctrl+V has no
+    // default xterm binding at all, so it's added outright.
+    term.attachCustomKeyEventHandler((e) => {
+      if (e.type !== 'keydown') return true;
+      const ctrlOrCmd = e.ctrlKey || e.metaKey;
+      if (ctrlOrCmd && !e.shiftKey && e.key.toLowerCase() === 'c' && term.hasSelection()) {
+        void navigator.clipboard.writeText(term.getSelection());
+        return false;
+      }
+      if (ctrlOrCmd && !e.shiftKey && e.key.toLowerCase() === 'v') {
+        void pasteFromClipboard();
+        return false;
+      }
+      return true;
+    });
+
+    // Right-click with nothing selected pastes; with a selection present,
+    // it copies instead (matches Windows Terminal/most terminal emulators'
+    // default). The browser's native menu is never shown here — always
+    // preventDefault, since this app supplies its own actions everywhere.
+    container.addEventListener('contextmenu', (e) => {
+      e.preventDefault();
+      if (term.hasSelection()) {
+        void navigator.clipboard.writeText(term.getSelection());
+      } else {
+        void pasteFromClipboard();
+      }
+    });
 
     term.onData((data) => {
       send({
@@ -149,6 +195,25 @@ export function TerminalPanel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [pendingRunRequest, connectionState]);
 
+  // Same one-shot pattern as pendingRunRequest, but for a Copilot-driven
+  // "run and capture the output" request (copilot/runAndCapture.ts) —
+  // always opens a *new* session rather than reusing whichever one is
+  // active, so the caller can correlate this run's stdout/exit code via a
+  // session id nothing else is typing into.
+  useEffect(() => {
+    if (!pendingCaptureRun || connectionState !== 'connected') return;
+    const req = consumePendingCaptureRun();
+    if (!req) return;
+    const sessionId = openSession(req.label);
+    req.onSessionOpened(sessionId);
+    send({
+      type: 'stdin',
+      session_id: sessionId,
+      data: bytesToBase64(new TextEncoder().encode(req.command + '\r')),
+    });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [pendingCaptureRun, connectionState]);
+
   useEffect(() => {
     if (connectionState === 'connected') setLaunchMessage(null);
   }, [connectionState]);
@@ -161,6 +226,12 @@ export function TerminalPanel() {
     sessionsRef.current.delete(id);
     setSessionIds((prev) => prev.filter((s) => s !== id));
     setActiveSessionId((prev) => (prev === id ? (sessionIds.find((s) => s !== id) ?? null) : prev));
+    setSessionLabels((prev) => {
+      if (!(id in prev)) return prev;
+      const next = { ...prev };
+      delete next[id];
+      return next;
+    });
   }
 
   // Show only the active session's container; fit it so PTY size matches.
@@ -201,8 +272,12 @@ export function TerminalPanel() {
     return (
       <div className="terminal-panel">
         <div className="terminal-settings-form">
-          <p>
-            terminal-host (Rust) をプロジェクトフォルダ内から起動し、表示されたポートとトークンを入力してください。
+          <p>通常は拡張機能の起動時に自動でterminal-hostが立ち上がって接続します。まだの場合はこちらから起動できます。</p>
+          <button onClick={() => void handleLaunchHost()}>ターミナルホストを起動</button>
+          {launchMessage && <span className="terminal-launch-message">{launchMessage}</span>}
+          <p className="terminal-settings-fallback-hint">
+            自動起動が使えない場合(terminal-host/install-native-messaging-host.bat
+            未実行など): terminal-host (Rust) をプロジェクトフォルダ内から手動で起動し、表示されたポートとトークンを入力してください。
           </p>
           <label>
             ポート
@@ -242,7 +317,7 @@ export function TerminalPanel() {
             className={`terminal-session-tab ${id === activeSessionId ? 'active' : ''}`}
             onClick={() => setActiveSessionId(id)}
           >
-            ターミナル
+            {sessionLabels[id] ?? 'ターミナル'}
             <button
               onClick={(e) => {
                 e.stopPropagation();

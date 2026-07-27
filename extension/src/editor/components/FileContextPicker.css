@@ -1,0 +1,112 @@
+.file-context-picker {
+  position: relative;
+}
+
+.file-context-chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+
+.file-context-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: monospace;
+  font-size: 11px;
+  border-radius: 3px;
+  padding: 2px 6px;
+  cursor: pointer;
+  color: inherit;
+}
+
+/* Open-but-not-yet-included tabs: dim/outlined, click adds them. */
+.file-context-chip.available {
+  background: none;
+  border: 1px dashed var(--border-color);
+  opacity: 0.55;
+}
+
+.file-context-chip.available:hover {
+  opacity: 0.9;
+}
+
+/* Included in the context: solid, with an explicit × to exclude. */
+.file-context-chip.included {
+  background: var(--editor-bg);
+  border: 1px solid var(--accent-color);
+  opacity: 1;
+}
+
+.file-context-chip.new {
+  border-style: dashed;
+}
+
+.file-context-chip-new-badge {
+  font-size: 9px;
+  opacity: 0.8;
+  border: 1px solid currentColor;
+  border-radius: 2px;
+  padding: 0 3px;
+}
+
+.file-context-chip-x {
+  opacity: 0.6;
+  padding: 0 2px;
+}
+
+.file-context-chip-x:hover {
+  opacity: 1;
+}
+
+.file-context-add-btn {
+  font-size: 11px;
+}
+
+.file-context-dropdown {
+  position: absolute;
+  z-index: 10;
+  top: 100%;
+  left: 0;
+  margin-top: 4px;
+  width: 320px;
+  max-height: 320px;
+  overflow-y: auto;
+  background: var(--editor-bg);
+  border: 1px solid var(--border-color);
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  display: flex;
+  flex-direction: column;
+}
+
+.file-context-search {
+  margin: 6px;
+  padding: 4px 6px;
+}
+
+.file-context-option {
+  display: block;
+  width: 100%;
+  text-align: left;
+  padding: 4px 8px;
+  background: none;
+  border: none;
+  color: inherit;
+  cursor: pointer;
+  font-family: monospace;
+  font-size: 11px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.file-context-option:hover {
+  background: var(--row-hover-bg);
+}
+
+.file-context-loading {
+  padding: 8px;
+  font-size: 12px;
+  opacity: 0.6;
+}

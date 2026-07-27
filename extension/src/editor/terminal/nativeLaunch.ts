@@ -4,11 +4,15 @@
 // terminal-host/install-native-messaging-host.bat; see docs/protocol.md.
 const NATIVE_HOST_NAME = 'com.m365copilot.terminal_host_launcher';
 
-const RESPONSE_TIMEOUT_MS = 5000;
+// The host may need to wait for the freshly spawned server to actually
+// bind its listener before responding (see native_messaging.rs's
+// wait_for_listening_port) — a bit more generous than a "is this host even
+// installed" check needs, so the extension isn't left retrying itself.
+const RESPONSE_TIMEOUT_MS = 10000;
 
 export type NativeLaunchResult =
-  | { status: 'started' }
-  | { status: 'already_running' }
+  | { status: 'started'; port: number; token: string }
+  | { status: 'already_running'; port: number; token: string }
   | { status: 'unavailable'; message: string }
   | { status: 'timeout' }
   | { status: 'error'; message: string };
@@ -31,7 +35,11 @@ export function launchTerminalHostViaNativeMessaging(): Promise<NativeLaunchResu
         resolve({ status: 'unavailable', message: chrome.runtime.lastError.message ?? '' });
         return;
       }
-      if (response?.status === 'started' || response?.status === 'already_running') {
+      if (
+        (response?.status === 'started' || response?.status === 'already_running') &&
+        typeof response.port === 'number' &&
+        typeof response.token === 'string'
+      ) {
         resolve(response as NativeLaunchResult);
         return;
       }

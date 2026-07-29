@@ -9,6 +9,7 @@ import { decodeBytes, detectEncodingFromBytes, encodeString, type TextEncodingId
 import { imageMimeType, looksBinary } from '../fs/fileKind';
 import { bytesToBase64 } from '../terminal/wsTerminalClient';
 import { useOpenAnywayPromptStore } from './openAnywayPromptStore';
+import { useExtensionsStore } from './extensionsStore';
 import { useLspStore } from '../lsp/lspStore';
 import { isLspLanguage } from '../lsp/lspLanguages';
 import { pathSegmentsToUri } from '../lsp/uriTranslation';
@@ -163,6 +164,19 @@ function isPathPrefixMatch(prefix: string[], full: string[]): boolean {
   return prefix.length <= full.length && prefix.every((segment, i) => full[i] === segment);
 }
 
+/** A file becoming the active/shown content in a group should always win
+ * over whatever extension tab that group might also have open (see
+ * extensionsStore.ts's viewingExtensionId/Group/Active) — otherwise
+ * clicking a file in the Explorer, or navigating via quick-open/go-to-
+ * definition/nav history, silently updates `activeFileId` internally
+ * while the extension detail view keeps showing on screen, since none of
+ * those paths go through EditorGroupPane.tsx's own file-tab click handler
+ * (the only place this was previously handled). */
+function deactivateExtensionTabIfHosting(groupId: string): void {
+  const ext = useExtensionsStore.getState();
+  if (ext.viewingExtensionGroupId === groupId) ext.deactivateExtensionView(groupId);
+}
+
 /** Focuses whichever group `id` lives in and makes it that group's active
  * tab — the one place that keeps `focusedGroupId`/`groups[*].activeFileId`
  * /the top-level `activeFileId` mirror all in agreement. Returns null if
@@ -174,6 +188,7 @@ function focusFileState(
 ): Pick<EditorTabsState, 'groups' | 'focusedGroupId' | 'activeFileId'> | null {
   const tab = state.openFiles.find((f) => f.id === id);
   if (!tab) return null;
+  deactivateExtensionTabIfHosting(tab.groupId);
   return {
     groups: { ...state.groups, [tab.groupId]: { ...state.groups[tab.groupId], activeFileId: id } },
     focusedGroupId: tab.groupId,
@@ -437,6 +452,7 @@ export const useEditorTabsStore = create<EditorTabsState>((set, get) => ({
           ? get().openFiles.find((f) => f.groupId === groupId && f.isPreview)
           : undefined;
         if (existingPreviewTab) disposeAndUnregisterTabs([existingPreviewTab]);
+        deactivateExtensionTabIfHosting(groupId);
 
         set((state) => ({
           openFiles: existingPreviewTab

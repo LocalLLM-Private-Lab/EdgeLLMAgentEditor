@@ -146,7 +146,6 @@ export function EditorGroupPane({ groupId }: { groupId: string }) {
   const viewingExtensionActive = useExtensionsStore((s) => s.viewingExtensionActive);
   const extensions = useExtensionsStore((s) => s.extensions);
   const viewExtension = useExtensionsStore((s) => s.viewExtension);
-  const deactivateExtensionView = useExtensionsStore((s) => s.deactivateExtensionView);
   const closeExtensionView = useExtensionsStore((s) => s.closeExtensionView);
   const hostsExtensionTab = viewingExtensionGroupId === groupId;
   const extensionTabActive = hostsExtensionTab && viewingExtensionActive;
@@ -157,8 +156,16 @@ export function EditorGroupPane({ groupId }: { groupId: string }) {
   // extension tab does — toggled by display, not conditional render, for
   // the same reason (switching to it and back shouldn't tear down/rebuild
   // whatever Monaco was showing).
+  // Clicking the extension tab doesn't clear the group's own activeFileId
+  // (see extensionsStore.ts's viewExtension/deactivateExtensionView) — it
+  // stays pointed at whichever file tab was active before, so an image tab
+  // being "active" per that id alone doesn't mean it's what's actually
+  // shown right now. Without the extensionTabActive check here, switching
+  // to the extension tab left the image viewer slot rendering right along
+  // with it (both mounted, image viewer just sitting below in normal
+  // document flow within the same scroll container).
   const activeTab = tabs.find((t) => t.id === activeFileId);
-  const imageTabActive = activeTab?.kind === 'image';
+  const imageTabActive = !extensionTabActive && activeTab?.kind === 'image';
 
   const [tabMenu, setTabMenu] = useState<TabContextMenuState | null>(null);
   const closeTabMenu = () => setTabMenu(null);
@@ -178,10 +185,7 @@ export function EditorGroupPane({ groupId }: { groupId: string }) {
             isDirty={tab.isDirty}
             isPreview={tab.isPreview}
             active={!extensionTabActive && tab.id === activeFileId}
-            onClick={() => {
-              if (hostsExtensionTab) deactivateExtensionView(groupId);
-              setActiveFile(tab.id);
-            }}
+            onClick={() => setActiveFile(tab.id)}
             onClose={() => closeFile(tab.id)}
             onContextMenu={(x, y) => setTabMenu({ x, y, fileId: tab.id })}
           />

@@ -81,10 +81,6 @@ body {
   flex-shrink: 0;
 }
 
-.app-header-spacer {
-  flex: 1;
-}
-
 .app-error {
   color: #e51400;
   font-size: 12px;

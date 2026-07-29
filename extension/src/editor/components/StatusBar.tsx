@@ -26,6 +26,11 @@ function LspBadge({ activeLanguage }: { activeLanguage: string | null }) {
   const readyLanguage = useLspStore((s) => s.readyLanguage);
   const workspaceRootOverride = useLspStore((s) => s.workspaceRootOverride);
   const setWorkspaceRootOverride = useLspStore((s) => s.setWorkspaceRootOverride);
+  // The same real path terminal-host's cwd uses (see workspaceStore.ts /
+  // .m365ce/config) — used automatically whenever there's no manual
+  // per-LSP override, so shown here just for transparency about what's
+  // actually in effect.
+  const autoWorkspaceRealPath = useWorkspaceStore((s) => s.workspaceRealPath);
   const [rootInput, setRootInput] = useState(workspaceRootOverride ?? '');
   const [picking, setPicking] = useState(false);
   const [pickMessage, setPickMessage] = useState<string | null>(null);
@@ -42,7 +47,7 @@ function LspBadge({ activeLanguage }: { activeLanguage: string | null }) {
       void setWorkspaceRootOverride(result.path);
     } else if (result.status === 'unavailable') {
       setPickMessage(
-        `lsp-host is not registered. Run lsp-host/install-native-messaging-host.bat once. (${result.message})`,
+        `lsp-host is not registered. Run "node setup/setup.js" once. (${result.message})`,
       );
     } else if (result.status === 'timeout') {
       setPickMessage('No response.');
@@ -103,7 +108,11 @@ function LspBadge({ activeLanguage }: { activeLanguage: string | null }) {
           {errorMessage && <div className="status-bar-dropdown-detail status-bar-dropdown-detail-error">{errorMessage}</div>}
           <div className="status-bar-dropdown-heading">Workspace Root</div>
           <div className="status-bar-dropdown-detail status-bar-lsp-root-hint">
-            The browser cannot resolve folder paths. If the lsp-host-selected folder is not your project, specify the project root here.
+            {workspaceRootOverride
+              ? 'The browser cannot resolve folder paths. If the lsp-host-selected folder is not your project, specify the project root here.'
+              : autoWorkspaceRealPath
+                ? `Auto-detected from the terminal's linked project folder: ${autoWorkspaceRealPath}. Only set this if a specific language server needs a different root (e.g. a monorepo subpackage).`
+                : 'Not linked yet — open the terminal panel and enter this workspace\'s real path in its guidance banner to link it once, or specify a root manually here.'}
           </div>
           <div className="status-bar-lsp-root-form">
             <button type="button" onClick={() => void handlePickFolder()} disabled={picking}>
@@ -124,7 +133,7 @@ function LspBadge({ activeLanguage }: { activeLanguage: string | null }) {
               className="status-bar-lsp-root-input"
               value={rootInput}
               onChange={(e) => setRootInput(e.target.value)}
-              placeholder="e.g. C:\Users\me\my-project"
+              placeholder={autoWorkspaceRealPath || 'e.g. C:\\Users\\me\\my-project'}
             />
             <button type="submit">Apply</button>
           </form>
@@ -235,8 +244,9 @@ export function StatusBar() {
       </div>
       <div className="status-bar-right">
         <LspBadge activeLanguage={activeTab?.language ?? null} />
-        {activeTab && <EncodingBadge tabId={activeTab.id} encoding={activeTab.encoding} />}
-        {activeTab && <EolBadge tabId={activeTab.id} eol={activeTab.eol} />}
+        {/* Encoding/EOL are meaningless for an image tab (no text buffer at all). */}
+        {activeTab?.kind === 'text' && <EncodingBadge tabId={activeTab.id} encoding={activeTab.encoding} />}
+        {activeTab?.kind === 'text' && <EolBadge tabId={activeTab.id} eol={activeTab.eol} />}
       </div>
     </footer>
   );

@@ -128,7 +128,7 @@ async function resolveLocationToMonaco(loc: LspLocation): Promise<{ uri: monaco.
 
   const tabsState = useEditorTabsStore.getState();
   const existing = tabsState.openFiles.find((f) => f.pathSegments.join('/') === segments.join('/'));
-  if (existing) {
+  if (existing?.model) {
     return { uri: existing.model.uri, range: lspRangeToMonaco(loc.range) };
   }
 
@@ -145,7 +145,12 @@ async function resolveLocationToMonaco(loc: LspLocation): Promise<{ uri: monaco.
   const opened = useEditorTabsStore
     .getState()
     .openFiles.find((f) => f.pathSegments.join('/') === segments.join('/'));
-  return opened ? { uri: opened.model.uri, range: lspRangeToMonaco(loc.range) } : null;
+  // An image tab has no Monaco model to navigate within — still worth
+  // resolving to *a* URI (e.g. an `import logo from './logo.png'` target)
+  // rather than failing the whole request, just via the plain file:// form.
+  return opened
+    ? { uri: opened.model?.uri ?? monaco.Uri.parse(loc.uri), range: lspRangeToMonaco(loc.range) }
+    : null;
 }
 
 /** For the references peek view, do not eagerly open every result as a tab.
@@ -166,7 +171,7 @@ function toReferenceLocation(loc: LspLocation): monaco.languages.Location | null
     .getState()
     .openFiles.find((f) => f.pathSegments.join('/') === segments.join('/'));
   return {
-    uri: existing?.model.uri ?? monaco.Uri.parse(loc.uri),
+    uri: existing?.model?.uri ?? monaco.Uri.parse(loc.uri),
     range: lspRangeToMonaco(loc.range),
   };
 }
@@ -369,7 +374,7 @@ export function ensureLspProvidersRegistered(): void {
       const opened = useEditorTabsStore
         .getState()
         .openFiles.find((file) => file.pathSegments.join('/') === segments.join('/'));
-      if (!opened) return false;
+      if (!opened?.model) return false; // an image tab has no model to navigate into
 
       source.setModel(opened.model);
       if (selectionOrPosition) {

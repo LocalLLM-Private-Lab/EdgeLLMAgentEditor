@@ -1,0 +1,87 @@
+.ext-quick-pick-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  justify-content: center;
+  align-items: flex-start;
+  padding-top: 12vh;
+  z-index: 1100;
+}
+
+.ext-quick-pick-modal {
+  width: 560px;
+  max-width: 90vw;
+  max-height: 60vh;
+  background: var(--editor-bg);
+  border: 1px solid var(--border-color);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  display: flex;
+  flex-direction: column;
+}
+
+.ext-quick-pick-input {
+  padding: 10px 12px;
+  font-size: 14px;
+  border: none;
+  border-bottom: 1px solid var(--border-color);
+  background: var(--editor-bg);
+  color: inherit;
+  outline: none;
+}
+
+.ext-quick-pick-list {
+  overflow-y: auto;
+}
+
+.ext-quick-pick-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.ext-quick-pick-item.active {
+  background: var(--accent-color);
+  color: #fff;
+}
+
+.ext-quick-pick-item-text {
+  min-width: 0;
+  flex: 1;
+}
+
+.ext-quick-pick-item-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ext-quick-pick-item-description,
+.ext-quick-pick-item-detail {
+  font-size: 11px;
+  opacity: 0.75;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.ext-quick-pick-checkbox {
+  flex-shrink: 0;
+}
+
+.ext-quick-pick-empty {
+  padding: 12px;
+  font-size: 12px;
+  opacity: 0.6;
+}
+
+.ext-quick-pick-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  padding: 8px 12px;
+  border-top: 1px solid var(--border-color);
+}

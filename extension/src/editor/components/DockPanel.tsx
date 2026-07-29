@@ -1,17 +1,40 @@
 import { useCallback, useRef, useState, type ComponentType, type PointerEvent as ReactPointerEvent } from 'react';
-import { useDockStore, PANEL_IDS, type DockZone, type PanelId, type SplitDirection } from '../state/dockStore';
+import { useDockStore, type BuiltinPanelId, type DockZone, type PanelId, type SplitDirection } from '../state/dockStore';
+import { useExtensionsStore, type InstalledExtension } from '../state/extensionsStore';
+import { parseExtensionPanelId } from '../extensions/extensionPanelId';
 import { computeDropTarget } from './dockDropTarget';
 import { TerminalPanel } from './TerminalPanel';
 import { CopilotPanel } from './CopilotPanel';
+import { BuildConsolePanel } from './BuildConsolePanel';
+import { ExtensionWebviewPanelContent } from './ExtensionWebviewPanelContent';
 import { useDismissOnOutsideClick } from '../hooks/useDismissOnOutsideClick';
 import '../components/MenuBar.css';
 import './DockPanel.css';
 
-export const PANEL_LABELS: Record<PanelId, string> = { terminal: 'ターミナル', copilot: 'Copilot' };
-const PANEL_COMPONENTS: Record<PanelId, ComponentType> = {
+export const PANEL_LABELS: Record<BuiltinPanelId, string> = {
+  terminal: 'ターミナル',
+  copilot: 'Copilot',
+  buildConsole: 'ビルドコンソール',
+};
+const PANEL_COMPONENTS: Record<BuiltinPanelId, ComponentType> = {
   terminal: TerminalPanel,
   copilot: CopilotPanel,
+  buildConsole: BuildConsolePanel,
 };
+
+/** Built-in panels use the static table above; an extension webview panel
+ * (id shaped `ext:<extensionId>:<viewId>`, see extensionPanelId.ts) has no
+ * static label — its tab shows the owning extension's displayName instead. */
+export function panelLabel(id: PanelId, extensions: InstalledExtension[]): string {
+  const extInfo = parseExtensionPanelId(id);
+  if (!extInfo) return PANEL_LABELS[id as BuiltinPanelId] ?? id;
+  return extensions.find((e) => e.id === extInfo.extensionId)?.displayName ?? extInfo.extensionId;
+}
+
+function PanelTabLabel({ id }: { id: PanelId }) {
+  const extensions = useExtensionsStore((s) => s.extensions);
+  return <>{panelLabel(id, extensions)}</>;
+}
 
 const DRAG_THRESHOLD_PX = 4;
 
@@ -21,35 +44,29 @@ interface DockTabMenuState {
   id: PanelId;
 }
 
-/** 非表示(閉じる)/もう一方のパネルの表示切替 — VS Code のパネルタブ右クリック
- * の「閉じる」相当。パネルは2種類しかないため、サブメニューなどは不要で
- * フラットな2項目で足りる。 */
+/** 非表示(閉じる)/同じゾーンを共有する他パネルの表示切替 — VS Code のパネル
+ * タブ右クリックの「閉じる」相当。組み込みパネルは常に2種類までだったため
+ * かつては「もう一方」固定だったが、拡張機能パネルが動的に増えるため、同じ
+ * ゾーンにいる他の全パネルを列挙する形に一般化している。 */
 function DockTabContextMenu({ state, onClose }: { state: DockTabMenuState; onClose: () => void }) {
   useDismissOnOutsideClick(onClose, true, ['click', 'contextmenu']);
   const panels = useDockStore((s) => s.panels);
   const toggleVisible = useDockStore((s) => s.toggleVisible);
+  const extensions = useExtensionsStore((s) => s.extensions);
   const { id } = state;
-  const otherId = PANEL_IDS.find((p) => p !== id)!;
-  const otherVisible = panels[otherId].visible;
-  // Controlling the other panel from here only makes sense when it shares
-  // this same zone (tabbed or split together, or hidden but would reappear
-  // here) — reaching into an unrelated zone from a tab that has nothing to
-  // do with it isn't a natural "close this tab" action.
-  const sameZone = panels[otherId].zone === panels[id].zone;
+  const zone = panels[id].zone;
+  // Reaching into an unrelated zone from a tab that has nothing to do with
+  // it isn't a natural "close this tab" action — only panels sharing this
+  // same zone (tabbed/split together, or hidden but would reappear here)
+  // are offered.
+  const others = Object.keys(panels).filter((p) => p !== id && panels[p].zone === zone);
 
   const items = [
-    {
-      label: `${PANEL_LABELS[id]}を非表示`,
-      onClick: () => toggleVisible(id),
-    },
-    ...(sameZone
-      ? [
-          {
-            label: `${PANEL_LABELS[otherId]}を${otherVisible ? '非表示' : '表示'}`,
-            onClick: () => toggleVisible(otherId),
-          },
-        ]
-      : []),
+    { label: `${panelLabel(id, extensions)}を非表示`, onClick: () => toggleVisible(id) },
+    ...others.map((otherId) => ({
+      label: `${panelLabel(otherId, extensions)}を${panels[otherId].visible ? '非表示' : '表示'}`,
+      onClick: () => toggleVisible(otherId),
+    })),
   ];
 
   return (
@@ -133,7 +150,7 @@ function DraggableTab({ id, active, onClick }: { id: PanelId; active: boolean; o
           setMenu({ x: e.clientX, y: e.clientY, id });
         }}
       >
-        {PANEL_LABELS[id]}
+        <PanelTabLabel id={id} />
       </button>
       {menu && <DockTabContextMenu state={menu} onClose={() => setMenu(null)} />}
     </>
@@ -141,7 +158,9 @@ function DraggableTab({ id, active, onClick }: { id: PanelId; active: boolean; o
 }
 
 function PanelContent({ id }: { id: PanelId }) {
-  const Component = PANEL_COMPONENTS[id];
+  const extInfo = parseExtensionPanelId(id);
+  if (extInfo) return <ExtensionWebviewPanelContent extensionId={extInfo.extensionId} viewId={extInfo.viewId} />;
+  const Component = PANEL_COMPONENTS[id as BuiltinPanelId];
   return <Component />;
 }
 

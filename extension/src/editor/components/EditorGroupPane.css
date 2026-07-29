@@ -52,9 +52,27 @@
   opacity: 1;
 }
 
+.editor-tab-extension-icon {
+  width: 16px;
+  height: 16px;
+  border-radius: 3px;
+  object-fit: cover;
+  flex-shrink: 0;
+}
+
+.editor-tab-extension-icon-fallback {
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
 .editor-group-body {
   flex: 1;
   min-width: 0;
   min-height: 0;
   position: relative;
+}
+
+.editor-group-content-slot {
+  height: 100%;
+  width: 100%;
 }

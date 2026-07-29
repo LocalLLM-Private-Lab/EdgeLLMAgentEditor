@@ -40,5 +40,32 @@ export default defineManifest({
   content_security_policy: {
     extension_pages:
       "script-src 'self'; object-src 'self'; connect-src 'self' ws://127.0.0.1:* http://127.0.0.1:*",
+    // Chrome's default sandbox CSP (inline scripts + eval allowed) covers
+    // a webview extension's own inline code, but not resources it loads
+    // from an external <script src>/<link>/<img> — which is exactly what
+    // `vscode.Webview.asWebviewUri` produces (a real
+    // `http://127.0.0.1:<port>/ext-resource/...` URL served by
+    // terminal-host, see ws_server.rs's serve_ext_resource route). Extend
+    // the relevant *-src directives to allow it; everything else stays at
+    // Chrome's own sandbox default.
+    sandbox:
+      "sandbox allow-scripts allow-forms allow-popups allow-modals; " +
+      "script-src 'self' 'unsafe-inline' 'unsafe-eval' http://127.0.0.1:*; " +
+      "style-src 'self' 'unsafe-inline' http://127.0.0.1:*; " +
+      "img-src 'self' data: http://127.0.0.1:*; " +
+      "font-src 'self' data: http://127.0.0.1:*; " +
+      "connect-src 'self' http://127.0.0.1:* ws://127.0.0.1:*; " +
+      "child-src 'self';",
+  },
+  // A regular extension page's CSP flatly disallows eval/inline scripts/blob
+  // imports (MV3, non-negotiable) — a webview-contributing VS Code
+  // extension's HTML routinely uses both. Sandboxed pages are the
+  // platform-sanctioned escape hatch: they get Chrome's relaxed default
+  // sandbox CSP (inline scripts + eval allowed) in exchange for losing all
+  // chrome.* extension API access, which is exactly the isolation a
+  // third-party extension's webview content should have anyway. See
+  // src/editor/webview-sandbox/.
+  sandbox: {
+    pages: ['src/editor/webview-sandbox/index.html'],
   },
 });

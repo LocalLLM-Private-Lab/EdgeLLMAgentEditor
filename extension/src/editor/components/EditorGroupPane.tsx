@@ -1,9 +1,12 @@
 import { useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import { useEditorTabsStore, tabsInGroup } from '../state/editorTabsStore';
 import { useWorkspaceStore } from '../state/workspaceStore';
+import { useExtensionsStore } from '../state/extensionsStore';
 import { useDismissOnOutsideClick } from '../hooks/useDismissOnOutsideClick';
 import { computeEditorDropTarget } from './editorDropTarget';
 import { MonacoEditorPane } from './MonacoEditorPane';
+import { ImageViewerPane } from './ImageViewerPane';
+import { ExtensionDetailView } from './ExtensionDetailView';
 import { FileIcon } from './FileIcon';
 import '../components/MenuBar.css';
 import './EditorGroupPane.css';
@@ -134,6 +137,29 @@ export function EditorGroupPane({ groupId }: { groupId: string }) {
   const setFocusedGroup = useEditorTabsStore((s) => s.setFocusedGroup);
   const tabs = tabsInGroup(openFiles, groupId);
 
+  // An extension's detail page behaves like one more tab in this same
+  // strip (see extensionsStore.ts's viewingExtensionId/Group/Active) —
+  // "hosted" means its tab lives here; "active" means it's the currently
+  // shown content rather than switched away from in favor of a file.
+  const viewingExtensionId = useExtensionsStore((s) => s.viewingExtensionId);
+  const viewingExtensionGroupId = useExtensionsStore((s) => s.viewingExtensionGroupId);
+  const viewingExtensionActive = useExtensionsStore((s) => s.viewingExtensionActive);
+  const extensions = useExtensionsStore((s) => s.extensions);
+  const viewExtension = useExtensionsStore((s) => s.viewExtension);
+  const deactivateExtensionView = useExtensionsStore((s) => s.deactivateExtensionView);
+  const closeExtensionView = useExtensionsStore((s) => s.closeExtensionView);
+  const hostsExtensionTab = viewingExtensionGroupId === groupId;
+  const extensionTabActive = hostsExtensionTab && viewingExtensionActive;
+  const viewedExtension = hostsExtensionTab ? extensions.find((e) => e.id === viewingExtensionId) : undefined;
+
+  // An image tab (png/jpg/... — see editorTabsStore.ts's openFile) has no
+  // Monaco model at all, so it needs its own content slot the same way the
+  // extension tab does — toggled by display, not conditional render, for
+  // the same reason (switching to it and back shouldn't tear down/rebuild
+  // whatever Monaco was showing).
+  const activeTab = tabs.find((t) => t.id === activeFileId);
+  const imageTabActive = activeTab?.kind === 'image';
+
   const [tabMenu, setTabMenu] = useState<TabContextMenuState | null>(null);
   const closeTabMenu = () => setTabMenu(null);
   useDismissOnOutsideClick(closeTabMenu, tabMenu !== null, ['click', 'contextmenu']);
@@ -151,12 +177,41 @@ export function EditorGroupPane({ groupId }: { groupId: string }) {
             name={tab.name}
             isDirty={tab.isDirty}
             isPreview={tab.isPreview}
-            active={tab.id === activeFileId}
-            onClick={() => setActiveFile(tab.id)}
+            active={!extensionTabActive && tab.id === activeFileId}
+            onClick={() => {
+              if (hostsExtensionTab) deactivateExtensionView(groupId);
+              setActiveFile(tab.id);
+            }}
             onClose={() => closeFile(tab.id)}
             onContextMenu={(x, y) => setTabMenu({ x, y, fileId: tab.id })}
           />
         ))}
+        {viewedExtension && (
+          <div
+            className={`editor-tab editor-tab-extension ${extensionTabActive ? 'active' : ''}`}
+            onClick={() => {
+              setFocusedGroup(groupId);
+              viewExtension(viewedExtension.id);
+            }}
+          >
+            {viewedExtension.iconDataUrl ? (
+              <img className="editor-tab-extension-icon" src={viewedExtension.iconDataUrl} alt="" />
+            ) : (
+              <span className="editor-tab-extension-icon-fallback">🧩</span>
+            )}
+            <span className="editor-tab-name">拡張機能: {viewedExtension.displayName}</span>
+            <button
+              className="editor-tab-close"
+              onClick={(e) => {
+                e.stopPropagation();
+                closeExtensionView();
+              }}
+              aria-label={`${viewedExtension.displayName} を閉じる`}
+            >
+              ×
+            </button>
+          </div>
+        )}
       </div>
       {tabMenu && menuTab && (
         <div
@@ -204,7 +259,28 @@ export function EditorGroupPane({ groupId }: { groupId: string }) {
         </div>
       )}
       <div className="editor-group-body" onMouseDownCapture={() => setFocusedGroup(groupId)}>
-        <MonacoEditorPane groupId={groupId} />
+        {/* Both stay mounted (display toggling, not conditional render) so
+            switching to/from the extension tab doesn't tear down and
+            recreate the whole Monaco editor instance (keybindings, LSP
+            providers, ...) every time — only the model swap that already
+            happens for file-to-file switching is cheap; a full remount
+            isn't. */}
+        <div
+          className="editor-group-content-slot"
+          style={{ display: extensionTabActive || imageTabActive ? 'none' : 'block' }}
+        >
+          <MonacoEditorPane groupId={groupId} />
+        </div>
+        {hostsExtensionTab && (
+          <div className="editor-group-content-slot" style={{ display: extensionTabActive ? 'block' : 'none' }}>
+            <ExtensionDetailView />
+          </div>
+        )}
+        {imageTabActive && (
+          <div className="editor-group-content-slot">
+            <ImageViewerPane groupId={groupId} />
+          </div>
+        )}
       </div>
     </div>
   );

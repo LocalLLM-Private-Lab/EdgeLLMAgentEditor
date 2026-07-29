@@ -1,6 +1,7 @@
 import { useDockStore } from '../state/dockStore';
+import { useExtensionsStore } from '../state/extensionsStore';
 import { computeDropTarget } from './dockDropTarget';
-import { PANEL_LABELS } from './DockPanel';
+import { panelLabel } from './DockPanel';
 import './DockDragOverlay.css';
 
 // Pure renderer — all the actual drag tracking (pointerdown/move/up) and
@@ -22,6 +23,7 @@ import './DockDragOverlay.css';
 export function DockDragOverlay() {
   const draggingPanel = useDockStore((s) => s.draggingPanel);
   const pointerPosition = useDockStore((s) => s.pointerPosition);
+  const extensions = useExtensionsStore((s) => s.extensions);
   if (!draggingPanel || !pointerPosition) return null;
 
   const target = computeDropTarget(pointerPosition.x, pointerPosition.y, draggingPanel);
@@ -40,7 +42,7 @@ export function DockDragOverlay() {
         />
       )}
       <div className="dock-drag-ghost" style={{ left: pointerPosition.x, top: pointerPosition.y }}>
-        {PANEL_LABELS[draggingPanel]}
+        {panelLabel(draggingPanel, extensions)}
       </div>
     </>
   );

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useMemo, useState } from 'react';
 import { getStoredValue, setStoredValue } from '../shared/chromeStorage';
 import { useWorkspaceStore } from './state/workspaceStore';
 import { useEditorTabsStore } from './state/editorTabsStore';
@@ -7,6 +7,13 @@ import { useKeybindingStore } from './state/keybindingStore';
 import { useLspStore } from './lsp/lspStore';
 import { useRunCommandStore, extensionOf, buildRunCommand } from './state/runCommandStore';
 import { useNamedCommandStore } from './state/namedCommandStore';
+import {
+  initExtensionHostBridge,
+  activateAutoStartExtensions,
+  startFileTreeAutoRefresh,
+} from './extensions/extensionHostClient';
+import { useExtensionsStore } from './state/extensionsStore';
+import { makeExtensionSettingsCategory } from './extensions/extensionSettingsCategory';
 import { resolveRelativeFilePath } from './terminal/resolveRelativeFilePath';
 import { useDockStore, panelsInZone } from './state/dockStore';
 import { FileTree } from './components/FileTree/FileTree';
@@ -15,14 +22,23 @@ import { EditorLayout } from './components/EditorLayout';
 import { EditorDragOverlay } from './components/EditorDragOverlay';
 import { WelcomeScreen } from './components/WelcomeScreen';
 import { StatusBar } from './components/StatusBar';
-import { DockPanel } from './components/DockPanel';
+import { DockPanel, panelLabel } from './components/DockPanel';
+import { parseExtensionPanelId } from './extensions/extensionPanelId';
 import { DockDragOverlay } from './components/DockDragOverlay';
-import { ActivityBar } from './components/ActivityBar';
+import { ExtensionNotifications } from './components/ExtensionNotifications';
+import { ExtensionQuickPick } from './components/ExtensionQuickPick';
+import { ActivityBar, type SidebarView } from './components/ActivityBar';
+import { ExtensionsPanel } from './components/ExtensionsPanel';
 import { MenuBar, type Menu } from './components/MenuBar';
 import { SettingsModal, type SettingsCategory } from './components/SettingsModal';
 import { ResizeHandle } from './components/ResizeHandle';
 import { QuickOpenModal } from './components/QuickOpenModal';
+import { AppCommandBar } from './components/AppCommandBar';
+import { WorkspacePathBanner } from './components/WorkspacePathBanner';
+import { WorkspaceRealPathModal } from './components/WorkspaceRealPathModal';
+import type { Command } from './commands/appCommands';
 import { TextEditContextMenu, type TextEditMenuState } from './components/TextEditContextMenu';
+import { OpenAnywayModal } from './components/OpenAnywayModal';
 import { useResizable } from './hooks/useResizable';
 import { usePromptTemplateStore } from './state/promptTemplateStore';
 import { usePlanPromptTemplateStore } from './state/planPromptTemplateStore';
@@ -77,16 +93,37 @@ export default function App() {
     axis: 'x',
     directionSign: 1,
   });
-  const [sidebarVisible, setSidebarVisible] = useState(true);
+  // null = sidebar closed. Otherwise which view (Explorer/Extensions) is
+  // showing in it — VS Code-style: the activity bar icons switch a single
+  // sidebar slot's content rather than each owning independent visibility.
+  const [activeSidebarView, setActiveSidebarView] = useState<SidebarView | null>('explorer');
   useEffect(() => {
-    void getStoredValue<boolean>('uiSidebarVisible').then((stored) => {
-      if (stored !== undefined) setSidebarVisible(stored);
+    void getStoredValue<SidebarView | null>('uiActiveSidebarView').then((stored) => {
+      if (stored !== undefined) setActiveSidebarView(stored);
     });
   }, []);
-  function toggleSidebarVisible() {
-    setSidebarVisible((cur) => {
-      const next = !cur;
-      void setStoredValue('uiSidebarVisible', next);
+  // An extension asked to open its own settings — either the "⚙ 設定"
+  // button on its ExtensionsPanel.tsx card, or its own webview calling
+  // `executeCommand('workbench.action.openSettings', ...)` (see
+  // extensionHostClient.ts's initExtensionHostBridge). Both funnel through
+  // the same request so SettingsModal opens pre-filtered to that
+  // extension's category regardless of which one triggered it.
+  const openSettingsRequest = useExtensionsStore((s) => s.openSettingsRequest);
+  // Only suppresses WelcomeScreen while the extension tab is the actively
+  // shown content (not merely open-but-switched-away-from in some group's
+  // strip) — see ExtensionDetailView.tsx, now rendered inline by
+  // EditorGroupPane.tsx rather than as an app-wide overlay.
+  const viewingExtensionActive = useExtensionsStore((s) => s.viewingExtensionActive);
+  const installedExtensions = useExtensionsStore((s) => s.extensions);
+  useEffect(() => {
+    if (!openSettingsRequest) return;
+    setSettingsCategory(makeExtensionSettingsCategory(openSettingsRequest));
+    useExtensionsStore.getState().clearOpenSettingsRequest();
+  }, [openSettingsRequest]);
+  function selectSidebarView(view: SidebarView) {
+    setActiveSidebarView((cur) => {
+      const next = cur === view ? null : view;
+      void setStoredValue('uiActiveSidebarView', next);
       return next;
     });
   }
@@ -131,6 +168,9 @@ export default function App() {
     void ensureTerminalConnected();
     void loadRunCommands();
     void loadNamedCommands();
+    initExtensionHostBridge();
+    void activateAutoStartExtensions();
+    startFileTreeAutoRefresh();
     void loadPromptTemplates();
     void loadPlanPromptTemplates();
     void loadKeybindingMode();
@@ -163,7 +203,23 @@ export default function App() {
   }
 
   const [quickOpenOpen, setQuickOpenOpen] = useState(false);
+  const [workspacePathModalOpen, setWorkspacePathModalOpen] = useState(false);
   const [textEditMenu, setTextEditMenu] = useState<TextEditMenuState | null>(null);
+
+  // App-wide commands, reachable from both AppCommandBar (the persistent
+  // header bar) and QuickOpenModal's Ctrl+P ">" mode — defined once here
+  // so the two can never drift apart. Currently just the one command;
+  // more can be appended without either consumer changing.
+  const commands: Command[] = useMemo(
+    () => [
+      {
+        id: 'register-workspace-path',
+        label: 'ワークスペースの実パスを登録...',
+        run: () => setWorkspacePathModalOpen(true),
+      },
+    ],
+    [],
+  );
 
   // Ctrl+P (Cmd+P on mac) opens quick-open from anywhere, matching VS
   // Code — preventDefault so the browser's own print dialog doesn't fire.
@@ -225,7 +281,7 @@ export default function App() {
   }, []);
 
   async function handleSaveAs() {
-    if (!activeTab || !rootHandle) return;
+    if (!activeTab || !rootHandle || activeTab.kind !== 'text' || !activeTab.model) return;
     const newName = window.prompt('名前を付けて保存', activeTab.name);
     if (!newName || newName === activeTab.name) return;
     try {
@@ -344,10 +400,41 @@ export default function App() {
           checked: dockPanels.copilot.visible,
         },
         {
+          label: 'ビルドコンソール',
+          onClick: () => toggleDockVisible('buildConsole'),
+          checked: dockPanels.buildConsole.visible,
+        },
+        // Extension webview panels — only listed once registered (the
+        // extension has been activated at least once this session; see
+        // extensionsStore.ts's setWebviewHtml/registerPanel). Without
+        // this, hiding one via its tab's own context menu (DockPanel.tsx)
+        // had no way back if it was the only panel in its zone — the
+        // whole zone stops rendering with zero visible panels, taking its
+        // tab strip (and thus the "show" toggle that lives there) with
+        // it. Real VS Code's own View menu lists every panel/view the
+        // same way, not just built-ins.
+        ...Object.keys(dockPanels)
+          .filter((id) => parseExtensionPanelId(id))
+          .map((id) => ({
+            label: panelLabel(id, installedExtensions),
+            onClick: () => toggleDockVisible(id),
+            checked: dockPanels[id].visible,
+          })),
+        {
           label: '折り返しの切り替え (Alt+Z)',
           onClick: handleToggleWordWrap,
         },
       ],
+    },
+    {
+      // ガワのみ — 実際のビルド処理は未実装。表示メニューのビルドコンソール
+      // パネル(BuildConsolePanel.tsx)と合わせて、実装時はここを差し替える。
+      label: 'ビルド',
+      items: [{ label: 'ビルドを実行(準備中)', onClick: () => {}, disabled: true }],
+    },
+    {
+      label: '実行',
+      items: [{ label: '実行(準備中)', onClick: () => {}, disabled: true }],
     },
     {
       label: 'ヘルプ',
@@ -363,20 +450,23 @@ export default function App() {
         {status === 'needs-reconnect' && (
           <button onClick={() => void reconnect()}>ワークスペースに再接続</button>
         )}
-        <div className="app-header-spacer" />
+        <AppCommandBar commands={commands} />
         {runCommandTemplate && <button onClick={handleRun}>▶ 実行</button>}
         {errorMessage && <span className="app-error">{errorMessage}</span>}
       </header>
+      <WorkspacePathBanner onOpenModal={() => setWorkspacePathModalOpen(true)} />
       <div className="app-body">
         <ActivityBar
-          sidebarVisible={sidebarVisible}
-          onToggleSidebar={toggleSidebarVisible}
+          activeView={activeSidebarView}
+          onSelectView={selectSidebarView}
           onOpenSettings={openSettings}
         />
-        {sidebarVisible && (
+        {activeSidebarView && (
           <>
             <aside className="app-sidebar" style={{ width: sidebar.size }}>
-              {status === 'connected' ? (
+              {activeSidebarView === 'extensions' ? (
+                <ExtensionsPanel />
+              ) : status === 'connected' ? (
                 <FileTree />
               ) : (
                 <div className="app-sidebar-empty">
@@ -432,7 +522,7 @@ export default function App() {
               <div className="app-editor-area">
                 <EditorLayout />
                 <EditorDragOverlay />
-                {status !== 'connected' && (
+                {status !== 'connected' && !viewingExtensionActive && (
                   <WelcomeScreen
                     needsReconnect={status === 'needs-reconnect'}
                     onOpenFolder={() => void openFolder()}
@@ -473,12 +563,20 @@ export default function App() {
         </div>
         <DockDragOverlay />
       </div>
+      <ExtensionNotifications />
+      <ExtensionQuickPick />
       <StatusBar />
       {settingsCategory && (
         <SettingsModal initialCategory={settingsCategory} onClose={() => setSettingsCategory(null)} />
       )}
-      {quickOpenOpen && rootHandle && <QuickOpenModal onClose={() => setQuickOpenOpen(false)} />}
+      {quickOpenOpen && rootHandle && (
+        <QuickOpenModal commands={commands} onClose={() => setQuickOpenOpen(false)} />
+      )}
+      {workspacePathModalOpen && (
+        <WorkspaceRealPathModal onClose={() => setWorkspacePathModalOpen(false)} />
+      )}
       {textEditMenu && <TextEditContextMenu state={textEditMenu} onClose={() => setTextEditMenu(null)} />}
+      <OpenAnywayModal />
     </div>
   );
 }

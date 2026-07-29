@@ -12,8 +12,10 @@ import {
   renameFileEntry,
   requestReadWritePermission,
   uniqueEntryName,
+  writeFileText,
 } from '../fs/fsaWorkspace';
 import { loadChildren } from '../fs/fileTreeLoader';
+import { readWorkspaceRealPath } from '../fs/workspaceRealPath';
 import {
   clearSavedWorkspaceHandle,
   loadSavedWorkspaceHandle,
@@ -44,6 +46,22 @@ interface WorkspaceState {
   status: ConnectionStatus;
   errorMessage: string | null;
   tree: FileTreeNode[];
+  /** The workspace's real absolute OS path, if terminal-host has ever
+   * written its `.m365ce/config` marker here (see workspaceRealPath.ts) —
+   * null for the common case where it hasn't. Used by TerminalPanel.tsx
+   * to open new sessions directly in this folder instead of wherever
+   * terminal-host itself happens to be running from. */
+  workspaceRealPath: string | null;
+  /** Writes `.m365ce/config` (`{"workspaceRealPath": path}`) directly into
+   * the *currently open* workspace folder via the File System Access
+   * handle already held here (`rootHandle`) — not a separately-picked
+   * folder, so this can never land in the wrong project. `path` is
+   * whatever the user typed/pasted in TerminalPanel.tsx's guidance
+   * banner, since the browser has no other way to learn its own real OS
+   * path (see docs/protocol.md). Future opens of this same workspace
+   * auto-detect it via `readWorkspaceRealPath` without repeating this
+   * step. No-op if no workspace is open. */
+  setWorkspaceRealPath: (path: string) => Promise<void>;
   openFolder: () => Promise<void>;
   restoreFromLastSession: () => Promise<void>;
   reconnect: () => Promise<void>;
@@ -57,6 +75,17 @@ interface WorkspaceState {
    * through a raw FileSystemDirectoryHandle call rather than createFile(),
    * e.g. the Copilot plan flow creating a new file at an arbitrary path. */
   refreshDirectoryAt: (dirHandle: FileSystemDirectoryHandle, dirPathSegments: string[]) => Promise<void>;
+  /** Re-fetches every currently-expanded directory's children in place,
+   * preserving each node's own expand state — the only way to notice
+   * files a process *outside* this tab created, e.g. an active
+   * extension's Node host writing straight to disk via raw `fs` (bypasses
+   * every createFile/writeFileBytes call this store itself makes
+   * entirely — see extensionHostClient.ts's startFileTreeAutoRefresh,
+   * which calls this periodically while any extension is active, and once
+   * on window focus). File System Access has no broadly-available
+   * change-notification API yet (`FileSystemObserver` isn't in this
+   * Edge/Chromium build) — periodic re-scan is the only option today. */
+  refreshTree: () => Promise<void>;
   createFile: (target: DirectoryTarget | null, name: string) => Promise<void>;
   createFolder: (target: DirectoryTarget | null, name: string) => Promise<void>;
   renameEntry: (node: FileTreeNode, newName: string) => Promise<void>;
@@ -75,12 +104,24 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
   status: 'empty',
   errorMessage: null,
   tree: [],
+  workspaceRealPath: null,
+
+  setWorkspaceRealPath: async (path: string) => {
+    const { rootHandle } = get();
+    const trimmed = path.trim();
+    if (!rootHandle || !trimmed) return;
+    const markerDir = await rootHandle.getDirectoryHandle('.m365ce', { create: true });
+    const configHandle = await markerDir.getFileHandle('config', { create: true });
+    await writeFileText(configHandle, JSON.stringify({ workspaceRealPath: trimmed }));
+    const tree = await buildRootTree(rootHandle);
+    set({ workspaceRealPath: trimmed, tree });
+  },
 
   openFolder: async () => {
     try {
       const handle = await pickWorkspaceFolder();
-      const tree = await buildRootTree(handle);
-      set({ rootHandle: handle, status: 'connected', tree, errorMessage: null });
+      const [tree, workspaceRealPath] = await Promise.all([buildRootTree(handle), readWorkspaceRealPath(handle)]);
+      set({ rootHandle: handle, status: 'connected', tree, errorMessage: null, workspaceRealPath });
       // Best-effort only — losing "restore on next launch" (e.g. IndexedDB
       // unavailable) shouldn't block using the folder for this session.
       try {
@@ -102,8 +143,8 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
     }
     const permission = await queryReadWritePermission(handle);
     if (permission === 'granted') {
-      const tree = await buildRootTree(handle);
-      set({ rootHandle: handle, status: 'connected', tree, errorMessage: null });
+      const [tree, workspaceRealPath] = await Promise.all([buildRootTree(handle), readWorkspaceRealPath(handle)]);
+      set({ rootHandle: handle, status: 'connected', tree, errorMessage: null, workspaceRealPath });
     } else {
       set({ rootHandle: handle, status: 'needs-reconnect' });
     }
@@ -111,7 +152,7 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
 
   closeFolder: async () => {
     useEditorTabsStore.getState().closeFilesByPathPrefix([]);
-    set({ rootHandle: null, status: 'empty', tree: [], errorMessage: null });
+    set({ rootHandle: null, status: 'empty', tree: [], errorMessage: null, workspaceRealPath: null });
     // Best-effort only — same reasoning as openFolder's save: forgetting to
     // un-remember this folder for next launch shouldn't block closing it now.
     try {
@@ -130,8 +171,11 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
         set({ status: 'needs-reconnect', errorMessage: '許可が付与されませんでした' });
         return;
       }
-      const tree = await buildRootTree(rootHandle);
-      set({ status: 'connected', tree, errorMessage: null });
+      const [tree, workspaceRealPath] = await Promise.all([
+        buildRootTree(rootHandle),
+        readWorkspaceRealPath(rootHandle),
+      ]);
+      set({ status: 'connected', tree, errorMessage: null, workspaceRealPath });
     } catch (err) {
       set({ status: 'error', errorMessage: (err as Error).message });
       await clearSavedWorkspaceHandle();
@@ -140,6 +184,20 @@ export const useWorkspaceStore = create<WorkspaceState>((set, get) => ({
 
   refreshDirectoryAt: async (dirHandle, dirPathSegments) => {
     await refreshDirectory(set, dirHandle, dirPathSegments);
+  },
+
+  refreshTree: async () => {
+    const { rootHandle, tree } = get();
+    if (!rootHandle) return;
+    // The root's own listing needs re-fetching too — it's implicitly
+    // "always expanded" (there's no FileTreeNode representing it, `tree`
+    // *is* its children), which refreshExpandedNodes alone never covers on
+    // its own since it only recurses into *nested* directories that are
+    // already in the array it's handed.
+    const freshRoot = await loadChildren(rootHandle, []);
+    const merged = mergeExpandState(freshRoot, tree);
+    const refreshed = await refreshExpandedNodes(merged);
+    set({ tree: refreshed });
   },
 
   toggleExpand: async (node: FileTreeNode) => {
@@ -244,6 +302,37 @@ async function refreshDirectory(
   } else {
     updateNode(set, dirPathSegments.join('/'), (n) => ({ ...n, children, childrenLoaded: true }));
   }
+}
+
+/** Carries each fresh node's expand state over from whichever old node
+ * shares its id — `loadChildren` always returns `childrenLoaded: false`
+ * for a brand-new listing, so without this every refresh would silently
+ * collapse whatever it touches back to unexpanded. */
+function mergeExpandState(fresh: FileTreeNode[], old: FileTreeNode[]): FileTreeNode[] {
+  const oldById = new Map(old.map((n) => [n.id, n]));
+  return fresh.map((f) => {
+    const o = oldById.get(f.id);
+    return o?.kind === 'directory' && f.kind === 'directory'
+      ? { ...f, childrenLoaded: o.childrenLoaded, children: o.children }
+      : f;
+  });
+}
+
+/** Re-lists every already-expanded directory in `nodes` (recursively) —
+ * collapsed directories and files are returned untouched (no need to
+ * re-list what isn't shown). Doesn't cover `nodes` itself being a stale
+ * listing (there's no FileTreeNode representing "the root" to carry
+ * childrenLoaded on) — see refreshTree, which re-fetches the root
+ * separately before calling this. */
+async function refreshExpandedNodes(nodes: FileTreeNode[]): Promise<FileTreeNode[]> {
+  return Promise.all(
+    nodes.map(async (node) => {
+      if (node.kind !== 'directory' || !node.childrenLoaded) return node;
+      const freshChildren = await loadChildren(node.handle as FileSystemDirectoryHandle, node.pathSegments);
+      const merged = mergeExpandState(freshChildren, node.children ?? []);
+      return { ...node, children: await refreshExpandedNodes(merged), childrenLoaded: true };
+    }),
+  );
 }
 
 function updateNode(

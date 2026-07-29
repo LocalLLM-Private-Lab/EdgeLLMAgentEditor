@@ -1,0 +1,57 @@
+.open-anyway-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+}
+
+.open-anyway-modal {
+  width: 440px;
+  max-width: 90vw;
+  background: var(--editor-bg);
+  border: 1px solid var(--border-color);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.open-anyway-modal h2 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.open-anyway-modal p {
+  margin: 0;
+  font-size: 12px;
+  opacity: 0.85;
+  line-height: 1.6;
+  word-break: break-all;
+}
+
+.open-anyway-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.open-anyway-actions button {
+  font-family: inherit;
+  font-size: 12px;
+  padding: 5px 12px;
+  border-radius: 3px;
+  border: 1px solid var(--border-color);
+  background: var(--panel-bg);
+  color: inherit;
+  cursor: pointer;
+}
+
+.open-anyway-actions button.danger {
+  border-color: var(--danger-border);
+  background: var(--danger-bg);
+  color: var(--danger-fg);
+}

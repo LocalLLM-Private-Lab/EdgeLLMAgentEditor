@@ -1,7 +1,7 @@
 // A browser extension has no direct way to start a local OS process — this
 // is the one browser-provided channel for it (Native Messaging). Requires
 // the one-time registry registration done by
-// terminal-host/install-native-messaging-host.bat; see docs/protocol.md.
+// `node setup/setup.js`; see docs/protocol.md.
 const NATIVE_HOST_NAME = 'com.m365copilot.terminal_host_launcher';
 
 // The host may need to wait for the freshly spawned server to actually

@@ -5,6 +5,7 @@ import { v4 as uuid } from 'uuid';
 import '@xterm/xterm/css/xterm.css';
 import './TerminalPanel.css';
 import { useTerminalStore } from '../state/terminalStore';
+import { useWorkspaceStore } from '../state/workspaceStore';
 import { base64ToBytes, bytesToBase64 } from '../terminal/wsTerminalClient';
 import type { ServerMessage } from '../terminal/terminalProtocol';
 import { DEFAULT_TERMINAL_HOST_PORT } from '../../shared/constants';
@@ -70,7 +71,7 @@ export function TerminalPanel() {
       );
     } else if (result.status === 'unavailable') {
       setLaunchMessage(
-        '未登録です。terminal-host/install-native-messaging-host.bat を一度実行してください。',
+        '未登録です。"node setup/setup.js" を一度実行してください。',
       );
     } else if (result.status === 'timeout') {
       setLaunchMessage(
@@ -98,10 +99,9 @@ export function TerminalPanel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [subscribe]);
 
-  // No cwd is ever sent — terminal-host opens new sessions in its own
-  // launch directory by default (see terminal-host/src/pty_session.rs).
-  // Run it from inside your project folder and it just works there, with
-  // no folder picker or path entry needed on this side.
+  // Sends workspaceRealPath as cwd when known (see below); otherwise cwd
+  // is omitted and terminal-host falls back to its own launch directory
+  // (see terminal-host/src/pty_session.rs's default_cwd()).
   function openSession(label?: string): string {
     const id = uuid();
     if (label) setSessionLabels((prev) => ({ ...prev, [id]: label }));
@@ -172,6 +172,12 @@ export function TerminalPanel() {
       cols: safeTerminalDimension(term.cols, 80),
       rows: safeTerminalDimension(term.rows, 24),
       shell: undefined,
+      // Real OS path of the open workspace, if known (see
+      // workspaceRealPath.ts) — lets a new session start there directly
+      // instead of wherever terminal-host itself happens to be running
+      // from. undefined (not sent) when unknown, so terminal-host falls
+      // back to its own launch directory as before.
+      cwd: useWorkspaceStore.getState().workspaceRealPath ?? undefined,
     });
 
     setSessionIds((prev) => [...prev, id]);
@@ -276,7 +282,7 @@ export function TerminalPanel() {
           <button onClick={() => void handleLaunchHost()}>ターミナルホストを起動</button>
           {launchMessage && <span className="terminal-launch-message">{launchMessage}</span>}
           <p className="terminal-settings-fallback-hint">
-            自動起動が使えない場合(terminal-host/install-native-messaging-host.bat
+            自動起動が使えない場合("node setup/setup.js"
             未実行など): terminal-host (Rust) をプロジェクトフォルダ内から手動で起動し、表示されたポートとトークンを入力してください。
           </p>
           <label>

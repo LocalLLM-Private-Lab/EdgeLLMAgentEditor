@@ -6,6 +6,7 @@ import { launchLspHostViaNativeMessaging } from './lspNativeLaunch';
 import { isLspLanguage } from './lspLanguages';
 import { type LspRange, lspRangeToMonaco, normalizeUriKey } from './uriTranslation';
 import { getStoredValue, setStoredValue } from '../../shared/chromeStorage';
+import { useWorkspaceStore } from '../state/workspaceStore';
 
 export type LspStatus =
   | 'idle'
@@ -574,9 +575,11 @@ function connect(
             for (const language of activeLanguages) {
               initializedLanguages.delete(language);
               sessionPromises.delete(language);
-              void openLanguageSession(language, useLspStore.getState().workspaceRootOverride, set).catch(
-                () => undefined,
-              );
+              void openLanguageSession(
+                language,
+                effectiveWorkspaceRoot(useLspStore.getState().workspaceRootOverride),
+                set,
+              ).catch(() => undefined);
             }
           }
         } else if (wsState === 'error') {
@@ -614,7 +617,7 @@ async function ensureConnection(set: (partial: Partial<LspState>) => void): Prom
         launch.status === 'timeout'
           ? 'No response. Close all Edge windows, restart Edge, and try again.'
           : launch.status === 'unavailable'
-            ? `lsp-host is not registered. Run lsp-host/install-native-messaging-host.bat once. (${launch.message})`
+            ? `lsp-host is not registered. Run "node setup/setup.js" once. (${launch.message})`
             : launch.message;
       throw new Error(message);
     }
@@ -626,6 +629,18 @@ async function ensureConnection(set: (partial: Partial<LspState>) => void): Prom
     throw error;
   });
   return connectionPromise;
+}
+
+/** The manual per-LSP override (StatusBar.tsx's "フォルダを選択...", still
+ * useful for e.g. a monorepo subpackage that needs a different root than
+ * the terminal) wins when set; otherwise falls back to the same central
+ * real path terminal-host's cwd already uses (see workspaceStore.ts's
+ * workspaceRealPath / .m365ce/config) — closes the gap where LSP used to
+ * default to lsp-host's own launch directory (equally wrong as
+ * terminal-host's old default, and for the same reason) whenever nobody
+ * had ever manually corrected it. */
+function effectiveWorkspaceRoot(explicitOverride: string | null): string | null {
+  return explicitOverride ?? useWorkspaceStore.getState().workspaceRealPath;
 }
 
 function openLanguageSession(
@@ -709,7 +724,9 @@ export const useLspStore = create<LspState>((set, get) => ({
     // root before the next language server is started.
     let chain = Promise.resolve();
     for (const language of activeLanguages) {
-      chain = chain.then(() => openLanguageSession(language, path, set)).catch(() => undefined);
+      chain = chain
+        .then(() => openLanguageSession(language, effectiveWorkspaceRoot(path), set))
+        .catch(() => undefined);
     }
   },
 
@@ -717,7 +734,7 @@ export const useLspStore = create<LspState>((set, get) => ({
     if (!isLspLanguage(language)) return Promise.reject(new Error(`Unsupported LSP language: ${language}`));
     activeLanguages.add(language);
     if (initializedLanguages.has(language)) return Promise.resolve();
-    return openLanguageSession(language, get().workspaceRootOverride, set);
+    return openLanguageSession(language, effectiveWorkspaceRoot(get().workspaceRootOverride), set);
   },
 
   registerDocument: (uri, model, languageId) => {

@@ -18,11 +18,13 @@
 
 `terminal-host` と同じ Native Messaging 起動の仕組みを使うが、1点改良している: レスポンスに `port`/`token` を含める。
 
-- 登録は `lsp-host/install-native-messaging-host.bat` が一度だけ行う。通常は `HKCU\Software\Microsoft\Edge\NativeMessagingHosts\com.edgellmagenteditor.lsp_host` を使うが、Edgeポリシー `NativeMessagingUserLevelHosts=0`（環境によっては単数形 `NativeMessagingUserLevelHost=0`）を検出した場合はUACで管理者権限を取得し、`HKLM`へ登録する。
+- 登録は `node setup/setup.js`(旧`lsp-host/install-native-messaging-host.bat`。`terminal-host`分も含め1つのスクリプトに統合済み)が一度だけ行う。通常は `HKCU\Software\Microsoft\Edge\NativeMessagingHosts\com.edgellmagenteditor.lsp_host` を使うが、Edgeポリシー `NativeMessagingUserLevelHosts=0`(環境によっては単数形 `NativeMessagingUserLevelHost=0`)を検出した場合はUACで管理者権限を取得し、`HKLM`へ登録する。
 - 拡張機能は `{"cmd":"start"}` を送る。`lsp-host/src/native_messaging.rs::handle_start()` は固定ポートと動的ポートの稼働状態を確認し、未起動なら常駐WSサーバを起動して実際にlistenしたポートを待ってから、`{"status":"started"|"already_running","port":..,"token":..}` を返す。別プロセスが固定ポートを占有している場合も、`/health` 応答でlsp-host自身かを確認して誤接続を避ける。
 - Native Messaging のレスポンスは呼び出し元の拡張機能にしかブラウザ経由で届かないため、この応答にトークンを含めても外部に漏れない。これにより`terminal-host`のような「表示されたport/tokenを設定画面に手動貼り付け」という手順が不要になり、ブラウザ側は`OpenSession`をそのまま自動送信できる。
 
 同じNative Messagingホストはもう1つのコマンドにも対応する: `{"cmd":"pick_folder"}` を送ると、`handle_pick_folder()` がネイティブのWindowsフォルダ選択ダイアログ(`rfd`クレート)を表示し、`{"status":"picked","path":"C:\\..."}` または(キャンセル時)`{"status":"cancelled"}` を返す。ワークスペースルート訂正機能(下記)のための絶対パス取得手段で、ステータスバーの「フォルダを選択...」ボタンからのみ、ユーザーの明示的なクリックに応じて呼び出される — `terminal-host`で撤去された無言の`pick_workspace_folder`(バックグラウンドで勝手にダイアログを出し、ブラウザの裏に隠れてハングのように見えた)とは異なり、常にユーザー操作の直接の結果として起動するため同じ問題は起きない。
+
+`workspace_root`を明示的に指定しなかった場合、ブラウザ側(`lspStore.ts`の`effectiveWorkspaceRoot`)は上記の個別オーバーライドが無ければ、開いているワークスペース自身の`.m365ce/config`由来の実パス(`workspaceStore.ts`の`workspaceRealPath`。ターミナルパネルの誘導バナーでユーザーが入力し、ワークスペースフォルダ自身に書き込まれる — `docs/protocol.md`の「cwd(作業フォルダ)の扱い」参照)を既定値として使う。個別オーバーライドはモノレポのサブパッケージなど、ターミナルの作業フォルダとLSPのルートを意図的に分けたい場合のための上書き手段として残っている。
 
 ## メッセージ(拡張機能 → ホスト、`ClientMessage`)
 

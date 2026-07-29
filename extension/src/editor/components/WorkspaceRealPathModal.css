@@ -1,0 +1,75 @@
+.workspace-path-modal-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+}
+
+.workspace-path-modal {
+  width: 480px;
+  max-width: 90vw;
+  background: var(--editor-bg);
+  border: 1px solid var(--border-color);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+  padding: 16px 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.workspace-path-modal h2 {
+  margin: 0;
+  font-size: 14px;
+}
+
+.workspace-path-modal p {
+  margin: 0;
+  font-size: 12px;
+  opacity: 0.8;
+  line-height: 1.5;
+}
+
+.workspace-path-modal-input {
+  font-family: monospace;
+  font-size: 13px;
+  padding: 6px 8px;
+  border: 1px solid var(--border-color);
+  background: var(--panel-bg);
+  color: inherit;
+  outline: none;
+}
+
+.workspace-path-modal-input:focus {
+  border-color: var(--accent-color);
+}
+
+.workspace-path-modal-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.workspace-path-modal-actions button {
+  font-family: inherit;
+  font-size: 12px;
+  padding: 5px 12px;
+  border-radius: 3px;
+  border: 1px solid var(--border-color);
+  background: var(--panel-bg);
+  color: inherit;
+  cursor: pointer;
+}
+
+.workspace-path-modal-actions button:last-child {
+  border-color: var(--accent-color);
+  background: var(--accent-color);
+  color: #fff;
+}
+
+.workspace-path-modal-actions button:disabled {
+  opacity: 0.6;
+  cursor: default;
+}

@@ -23,9 +23,10 @@ export interface ApplyPreview {
 /** Prepares a diff preview for an already-open tab. */
 export function prepareApplyToOpenTab(tabId: string, block: ExtractedCodeBlock): ApplyPreview | null {
   const tab = useEditorTabsStore.getState().openFiles.find((f) => f.id === tabId);
-  if (!tab) return null;
+  if (!tab || tab.kind !== 'text' || !tab.model) return null; // nothing text-shaped to diff/apply against
+  const model = tab.model;
 
-  const original = tab.model.getValue();
+  const original = model.getValue();
   const modified = normalizeLineEndings(block.code, original);
 
   return {
@@ -34,7 +35,7 @@ export function prepareApplyToOpenTab(tabId: string, block: ExtractedCodeBlock):
     modified,
     language: tab.language,
     apply: async () => {
-      tab.model.setValue(modified);
+      model.setValue(modified);
       await useEditorTabsStore.getState().saveFile(tabId);
     },
   };
@@ -85,7 +86,7 @@ export function prepareApplyForNewFile(
       const tab = useEditorTabsStore
         .getState()
         .openFiles.find((f) => f.pathSegments.join('/') === node.id);
-      if (!tab) return;
+      if (!tab || tab.kind !== 'text' || !tab.model) return;
       tab.model.setValue(block.code);
       await useEditorTabsStore.getState().saveFile(tab.id);
     },

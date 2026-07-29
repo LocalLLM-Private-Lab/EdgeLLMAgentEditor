@@ -514,7 +514,7 @@ export function MonacoEditorPane({ groupId }: { groupId: string }) {
     const editor = editorRef.current;
     if (!editor) return;
     const activeTab = openFiles.find((f) => f.id === groupActiveFileId);
-    editor.setModel(activeTab ? activeTab.model : null);
+    editor.setModel(activeTab?.model ?? null);
   }, [groupActiveFileId, openFiles]);
 
   // Applies the selected vim/emacs input-intercept layer on top of the

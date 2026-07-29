@@ -6,6 +6,9 @@ import { getFileLastModified, readFileBytes, writeFileBytes } from '../fs/fsaWor
 import { languageFromFilename } from '../monaco/languageRegistrations';
 import { ensureLanguageTokenization } from '../monaco/textmateTokenization';
 import { decodeBytes, detectEncodingFromBytes, encodeString, type TextEncodingId } from '../fs/textEncodings';
+import { imageMimeType, looksBinary } from '../fs/fileKind';
+import { bytesToBase64 } from '../terminal/wsTerminalClient';
+import { useOpenAnywayPromptStore } from './openAnywayPromptStore';
 import { useLspStore } from '../lsp/lspStore';
 import { isLspLanguage } from '../lsp/lspLanguages';
 import { pathSegmentsToUri } from '../lsp/uriTranslation';
@@ -25,7 +28,8 @@ function eolSequence(eol: 'LF' | 'CRLF'): monaco.editor.EndOfLineSequence {
 const pendingFileOpens = new Map<string, Promise<void>>();
 
 export interface EditorTab extends OpenFile {
-  model: monaco.editor.ITextModel;
+  /** Absent for `kind: 'image'` tabs — see OpenFile's `kind` doc comment. */
+  model?: monaco.editor.ITextModel;
   /** Which editor group's tab strip this file currently belongs to — see
    * `groups`/`layout` below. A file lives in exactly one group at a time
    * (no "same file open twice" support, matching how `openFile` already
@@ -307,10 +311,11 @@ function resizeAdjacentPanes(node: EditorLayoutNode, splitId: string, index: num
 function disposeAndUnregisterTabs(tabs: EditorTab[]): void {
   const rootUri = useLspStore.getState().rootUri;
   for (const tab of tabs) {
+    if (tab.kind !== 'text') continue; // image tabs have no model, were never LSP-registered
     if (isLspLanguage(tab.language) && rootUri) {
       useLspStore.getState().unregisterDocument(pathSegmentsToUri(rootUri, tab.pathSegments));
     }
-    tab.model.dispose();
+    tab.model?.dispose();
   }
 }
 
@@ -423,6 +428,60 @@ export const useEditorTabsStore = create<EditorTabsState>((set, get) => ({
         readFileBytes(fileHandle),
         getFileLastModified(fileHandle),
       ]);
+
+      // Inserts a finished tab (image or text) into the tab strip — shared
+      // by both branches below since the "reuse the group's preview slot"
+      // logic doesn't care which kind of tab it's inserting.
+      function insertTab(tab: EditorTab) {
+        const existingPreviewTab = preview
+          ? get().openFiles.find((f) => f.groupId === groupId && f.isPreview)
+          : undefined;
+        if (existingPreviewTab) disposeAndUnregisterTabs([existingPreviewTab]);
+
+        set((state) => ({
+          openFiles: existingPreviewTab
+            ? state.openFiles.map((f) => (f.id === existingPreviewTab.id ? tab : f))
+            : [...state.openFiles, tab],
+          groups: { ...state.groups, [groupId]: { ...state.groups[groupId], activeFileId: tab.id } },
+          focusedGroupId: groupId,
+          activeFileId: tab.id,
+          ...pushHistory(state, tab.id),
+        }));
+      }
+
+      const mimeType = imageMimeType(node.name);
+      if (mimeType) {
+        const id = uuid();
+        insertTab({
+          id,
+          name: node.name,
+          pathSegments: node.pathSegments,
+          fileHandle,
+          modelUri: `image://${id}`,
+          isDirty: false,
+          language: 'plaintext',
+          lastKnownDiskModified: lastModified,
+          encoding: 'utf-8',
+          eol: 'LF',
+          groupId,
+          isPreview: preview,
+          kind: 'image',
+          imageDataUrl: `data:${mimeType};base64,${bytesToBase64(bytes)}`,
+        });
+        return;
+      }
+
+      // A NUL byte in the leading bytes means this almost certainly isn't
+      // meant to be read as text (see fs/fileKind.ts's looksBinary) — ask
+      // before decoding it as UTF-8-with-replacement-characters garbage
+      // that would silently corrupt the file if ever saved. Declining
+      // aborts entirely: no tab, nothing to clean up (pendingFileOpens'
+      // finally block still runs via the outer try/finally).
+      if (looksBinary(bytes)) {
+        const openAnyway = await useOpenAnywayPromptStore.getState().request(node.name);
+        if (!openAnyway) return;
+      }
+
       const encoding = detectEncodingFromBytes(bytes);
       const content = decodeBytes(bytes, encoding);
       const eol = detectEol(content);
@@ -451,6 +510,7 @@ export const useEditorTabsStore = create<EditorTabsState>((set, get) => ({
         model,
         groupId,
         isPreview: preview,
+        kind: 'text',
       };
 
       model.onDidChangeContent(() => {
@@ -491,23 +551,7 @@ export const useEditorTabsStore = create<EditorTabsState>((set, get) => ({
         })();
       }
 
-      // A new preview open reuses/replaces whatever preview tab is
-      // already in this group instead of adding another one — browsing
-      // files in the Explorer shouldn't pile up tabs.
-      const existingPreviewTab = preview
-        ? get().openFiles.find((f) => f.groupId === groupId && f.isPreview)
-        : undefined;
-      if (existingPreviewTab) disposeAndUnregisterTabs([existingPreviewTab]);
-
-      set((state) => ({
-        openFiles: existingPreviewTab
-          ? state.openFiles.map((f) => (f.id === existingPreviewTab.id ? tab : f))
-          : [...state.openFiles, tab],
-        groups: { ...state.groups, [groupId]: { ...state.groups[groupId], activeFileId: id } },
-        focusedGroupId: groupId,
-        activeFileId: id,
-        ...pushHistory(state, id),
-      }));
+      insertTab(tab);
     })();
 
     pendingFileOpens.set(node.id, loadPromise);
@@ -553,7 +597,7 @@ export const useEditorTabsStore = create<EditorTabsState>((set, get) => ({
 
   saveFile: async (id: string) => {
     const tab = get().openFiles.find((f) => f.id === id);
-    if (!tab) return;
+    if (!tab || tab.kind !== 'text' || !tab.model) return; // image tabs are never edited/dirty — nothing to save
 
     const diskModified = await getFileLastModified(tab.fileHandle);
     if (diskModified !== tab.lastKnownDiskModified) {
@@ -614,16 +658,19 @@ export const useEditorTabsStore = create<EditorTabsState>((set, get) => ({
     set((state) => ({
       openFiles: state.openFiles.map((f) => {
         if (f.pathSegments.join('/') !== oldPathSegments.join('/')) return f;
-        const oldLanguage = f.language;
         const newPathSegments = [...f.pathSegments.slice(0, -1), newName];
+        // Image tabs have no model/language to update — just relocate.
+        if (f.kind !== 'text') return { ...f, name: newName, pathSegments: newPathSegments };
+        const oldLanguage = f.language;
         const language = languageFromFilename(newName);
         const rootUri = useLspStore.getState().rootUri;
         if (isLspLanguage(oldLanguage) && rootUri) {
           useLspStore.getState().unregisterDocument(pathSegmentsToUri(rootUri, f.pathSegments));
         }
         void ensureLanguageTokenization(language);
-        monaco.editor.setModelLanguage(f.model, language);
-        if (isLspLanguage(language)) {
+        const model = f.model;
+        if (model) monaco.editor.setModelLanguage(model, language);
+        if (isLspLanguage(language) && model) {
           void (async () => {
             try {
               await useLspStore.getState().ensureSession(language);
@@ -634,7 +681,7 @@ export const useEditorTabsStore = create<EditorTabsState>((set, get) => ({
             if (nextRootUri) {
               useLspStore
                 .getState()
-                .registerDocument(pathSegmentsToUri(nextRootUri, newPathSegments), f.model, language);
+                .registerDocument(pathSegmentsToUri(nextRootUri, newPathSegments), model, language);
             }
           })();
         }
@@ -645,7 +692,7 @@ export const useEditorTabsStore = create<EditorTabsState>((set, get) => ({
 
   setFileEncoding: async (id: string, encoding: TextEncodingId, mode: 'reopen' | 'resave') => {
     const tab = get().openFiles.find((f) => f.id === id);
-    if (!tab) return;
+    if (!tab || tab.kind !== 'text') return;
 
     if (mode === 'resave') {
       set((state) => ({
@@ -661,6 +708,7 @@ export const useEditorTabsStore = create<EditorTabsState>((set, get) => ({
       if (!discard) return;
     }
 
+    if (!tab.model) return;
     const bytes = await readFileBytes(tab.fileHandle);
     const content = decodeBytes(bytes, encoding);
     const eol = detectEol(content);
@@ -678,7 +726,7 @@ export const useEditorTabsStore = create<EditorTabsState>((set, get) => ({
 
   setFileEol: (id: string, eol: 'LF' | 'CRLF') => {
     const tab = get().openFiles.find((f) => f.id === id);
-    if (!tab || tab.eol === eol) return;
+    if (!tab || tab.eol === eol || !tab.model) return;
     tab.model.setEOL(eolSequence(eol));
     set((state) => ({
       openFiles: state.openFiles.map((f) => (f.id === id ? { ...f, eol, isDirty: true } : f)),
@@ -809,7 +857,7 @@ useLspStore.subscribe((state) => {
 
   const rootUri = state.rootUri;
   for (const tab of useEditorTabsStore.getState().openFiles) {
-    if (tab.language !== state.readyLanguage) continue;
+    if (tab.language !== state.readyLanguage || !tab.model) continue;
     useLspStore.getState().registerDocument(pathSegmentsToUri(rootUri, tab.pathSegments), tab.model, tab.language);
   }
 });

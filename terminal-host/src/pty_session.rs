@@ -34,12 +34,18 @@ fn clamp_dimension(value: u16) -> u16 {
     value.max(1)
 }
 
-/// The extension never sends a cwd (there is no browser API that exposes
-/// a real OS path for a File System Access handle, by deliberate design —
-/// see docs/protocol.md). Instead, the expected usage is to launch this
-/// host from within the project folder itself, so its own launch
-/// directory already *is* the right cwd, with zero prompting. Falls back
-/// to the system drive root only if the launch directory can't be read.
+/// Used whenever `OpenSession.cwd` is absent — the common case is still
+/// that the extension has no real OS path to send at all (there is no
+/// browser API that exposes one for a File System Access handle, by
+/// deliberate design — see docs/protocol.md), so the expected usage
+/// remains launching this host from within the project folder itself, its
+/// own launch directory already being the right cwd with zero prompting.
+/// (The extension *can* send an explicit `cwd` when it managed to read
+/// `.m365ce/config` back out of the open workspace — see
+/// `write_workspace_marker` in main.rs and extension/src/editor/fs/
+/// workspaceRealPath.ts — but that only covers the workspace that marker
+/// was written into.) Falls back to the system drive root only if the
+/// launch directory can't be read.
 fn default_cwd() -> String {
     if let Ok(dir) = std::env::current_dir() {
         return dir.to_string_lossy().into_owned();

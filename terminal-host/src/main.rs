@@ -1,5 +1,6 @@
 mod auth;
 mod config;
+mod ext_host;
 mod native_messaging;
 mod protocol;
 mod pty_session;
@@ -57,6 +58,7 @@ async fn main() -> anyhow::Result<()> {
         config: cfg.clone(),
         expected_origin,
         active_connections: std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0)),
+        actual_port: port,
     };
     let app = ws_server::build_router(state);
 
@@ -69,9 +71,10 @@ async fn main() -> anyhow::Result<()> {
     println!("  token: {}", cfg.token);
     println!("  (paste the WebSocket URL and token into the extension's settings panel)");
     println!();
-    println!("  new terminals will open in: {cwd}");
-    println!("  (this process's own launch directory — cd there yourself in the terminal");
-    println!("   if that's not where you want to work, same as any other terminal app)");
+    println!("  new terminals default to: {cwd}");
+    println!("  (this process's own launch directory, unless the extension has a real");
+    println!("   project path via .m365ce/config — see the \"フォルダを選択\" guidance banner");
+    println!("   in the terminal panel, or ws_server.rs's PickWorkspaceRoot)");
     println!();
     println!("  exits itself shortly after the last connected client disconnects");
 

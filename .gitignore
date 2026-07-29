@@ -2,9 +2,21 @@
 terminal-host/target
 terminal-host/**/*.pdb
 terminal-host/native-messaging-host-manifest.json
+terminal-host/ext-cache
+# context.globalState/workspaceState persistence for installed extensions
+# (vscode-shim.js) — real user data (e.g. an installed extension's chat
+# history), never something to commit.
+terminal-host/ext-state
 lsp-host/target
 lsp-host/**/*.pdb
 lsp-host/native-messaging-host-manifest.json
+
+# Written into an opened workspace folder once its real OS path is
+# registered (WorkspacePathBanner.tsx / AppCommandBar.tsx's "ワークスペースの
+# 実パスを登録..." -> workspaceStore.ts's setWorkspaceRealPath) — this repo's
+# own working tree can end up with one too if it's ever opened as a
+# workspace in the app itself.
+.m365ce
 
 # OS
 .DS_Store

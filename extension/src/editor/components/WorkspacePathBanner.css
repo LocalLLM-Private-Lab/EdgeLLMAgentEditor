@@ -1,0 +1,37 @@
+.workspace-path-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 14px;
+  background: #2a2410;
+  color: #f0c674;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+
+.workspace-path-banner button {
+  font-family: inherit;
+  font-size: 11px;
+  padding: 3px 10px;
+  border-radius: 3px;
+  border: 1px solid #f0c674;
+  background: transparent;
+  color: #f0c674;
+  cursor: pointer;
+}
+
+.workspace-path-banner button:hover {
+  background: rgba(240, 198, 116, 0.15);
+}
+
+.workspace-path-banner-dismiss {
+  margin-left: auto;
+  border: none !important;
+  font-size: 12px;
+  padding: 2px 6px !important;
+  opacity: 0.7;
+}
+
+.workspace-path-banner-dismiss:hover {
+  opacity: 1;
+}

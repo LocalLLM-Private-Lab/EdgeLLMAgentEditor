@@ -1,7 +1,7 @@
 // A browser extension has no direct way to start a local OS process — this
 // is the one browser-provided channel for it (Native Messaging). Requires
 // the one-time registry registration done by
-// lsp-host/install-native-messaging-host.bat; see docs/lsp_protocol.md.
+// `node setup/setup.js`; see docs/lsp_protocol.md.
 //
 // Unlike extension/src/editor/terminal/nativeLaunch.ts, the response also
 // carries `port`/`token` (see lsp-host/src/native_messaging.rs), so the

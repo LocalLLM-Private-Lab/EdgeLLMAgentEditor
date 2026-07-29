@@ -1,11 +1,17 @@
 import { create } from 'zustand';
 import { getStoredValue, setStoredValue } from '../../shared/chromeStorage';
+import { parseExtensionPanelId } from '../extensions/extensionPanelId';
 
 export type DockZone = 'top' | 'bottom' | 'left' | 'right';
-export type PanelId = 'terminal' | 'copilot';
+export type BuiltinPanelId = 'terminal' | 'copilot' | 'buildConsole';
+/** Built-in panels are fixed; extension webviews are registered dynamically
+ * at runtime (see registerPanel) using the `ext:<extensionId>:<viewId>`
+ * convention from extensionPanelId.ts — widened to a plain string rather
+ * than a closed union since the full set can't be known ahead of time. */
+export type PanelId = string;
 export type SplitDirection = 'row' | 'column';
 
-export const PANEL_IDS: PanelId[] = ['terminal', 'copilot'];
+export const BUILTIN_PANEL_IDS: BuiltinPanelId[] = ['terminal', 'copilot', 'buildConsole'];
 export const DOCK_ZONES: DockZone[] = ['top', 'bottom', 'left', 'right'];
 
 const STORAGE_KEY = 'uiDockLayout';
@@ -23,8 +29,8 @@ interface SplitState {
    * (top/bottom halves). */
   direction: SplitDirection;
   /** [first, second] — first is the left/top half, second is the
-   * right/bottom half. Only ever the two entries in PANEL_IDS, in
-   * whichever order the split was created. */
+   * right/bottom half. Always the two panels currently occupying the
+   * split zone, in whichever order the split was created. */
   order: [PanelId, PanelId];
 }
 
@@ -45,16 +51,49 @@ interface StoredLayout {
 // nothing has ever been persisted) — terminal starts visible so the app
 // opens ready to use rather than needing a trip to the 表示 menu first;
 // any later explicit hide is persisted and respected from then on, this
-// default never overrides an actual saved preference.
+// default never overrides an actual saved preference. Extension panels are
+// never part of this default — they're added later via registerPanel once
+// an extension actually registers a webview.
 const DEFAULT_LAYOUT: StoredLayout = {
   panels: {
     terminal: { zone: 'bottom', visible: true },
     copilot: { zone: 'bottom', visible: false },
+    buildConsole: { zone: 'bottom', visible: false },
   },
   activeByZone: {},
   splitByZone: {},
   splitRatio: {},
 };
+
+/** A persisted `ext:` panel entry always refers to a webview from a *past*
+ * session's Node extension-host process — long gone by the time a fresh
+ * page load gets here (every extension starts back at 'inactive', see
+ * extensionsStore.ts's `status` doc comment). Left in, it renders as a
+ * permanently blank panel until its extension happens to be reactivated —
+ * this strips it right where the persisted layout gets applied, the one
+ * point guaranteed to run before anything renders from it. (An earlier
+ * version did this as a separate cleanup call from extensionsStore.ts's
+ * loadExtensions() instead — racy, since it and this load() both read
+ * chrome.storage independently in the same startup effect: if load()'s
+ * blanket `set()` happened to resolve *after* that cleanup, it would
+ * silently resurrect the exact panel just removed.) */
+function stripStaleExtensionPanels(saved: StoredLayout): StoredLayout {
+  const panels = { ...saved.panels };
+  for (const id of Object.keys(panels)) {
+    if (parseExtensionPanelId(id)) delete panels[id];
+  }
+  const activeByZone = { ...saved.activeByZone };
+  for (const zone of DOCK_ZONES) {
+    const activeId = activeByZone[zone];
+    if (activeId && !panels[activeId]) delete activeByZone[zone];
+  }
+  const splitByZone = { ...saved.splitByZone };
+  for (const zone of DOCK_ZONES) {
+    const split = splitByZone[zone];
+    if (split && split.order.some((id) => !panels[id])) delete splitByZone[zone];
+  }
+  return { panels, activeByZone, splitByZone, splitRatio: saved.splitRatio };
+}
 
 interface DockState extends StoredLayout {
   loaded: boolean;
@@ -99,6 +138,20 @@ interface DockState extends StoredLayout {
   setVisible: (id: PanelId, visible: boolean) => void;
   toggleVisible: (id: PanelId) => void;
   setActiveInZone: (zone: DockZone, id: PanelId) => void;
+  /** Registers a dynamically-provided panel (currently: an extension
+   * webview) so it can dock/drag/split exactly like a built-in panel.
+   * Unknown id -> added fresh in `defaultZone`, shown, and made that
+   * zone's active tab. Already-known id (the user previously moved it, or
+   * this is a re-activation after a prior session) -> only `visible` is
+   * forced true; the remembered zone is left untouched so it reopens
+   * wherever the user last put it. */
+  registerPanel: (id: PanelId, defaultZone: DockZone) => void;
+  /** Fully removes a dynamically-registered panel (extension deactivated
+   * or uninstalled) — unlike setVisible(id, false), the entry itself is
+   * deleted rather than just hidden, since the id may never be valid
+   * again (e.g. a fresh createWebviewPanel gets a new random id next
+   * time it's activated). */
+  unregisterPanel: (id: PanelId) => void;
 }
 
 function persist(get: () => DockState): void {
@@ -106,10 +159,11 @@ function persist(get: () => DockState): void {
   void setStoredValue<StoredLayout>(STORAGE_KEY, { panels, activeByZone, splitByZone, splitRatio });
 }
 
-/** Given a panel is leaving `zone` (moved elsewhere, or hidden), picks
- * who should become that zone's active tab: whichever other panel is
- * still visible there, or none. Only matters when the departing panel
- * *was* the active one — otherwise the existing entry is still valid. */
+/** Given a panel is leaving `zone` (moved elsewhere, hidden, or
+ * unregistered), picks who should become that zone's active tab: whichever
+ * other panel is still visible there, or none. Only matters when the
+ * departing panel *was* the active one — otherwise the existing entry is
+ * still valid. */
 function reassignActiveInZone(
   panels: Record<PanelId, PanelPlacement>,
   activeByZone: Partial<Record<DockZone, PanelId>>,
@@ -118,7 +172,7 @@ function reassignActiveInZone(
 ): Partial<Record<DockZone, PanelId>> {
   if (activeByZone[zone] !== departingId) return activeByZone;
   const next = { ...activeByZone };
-  const other = PANEL_IDS.find((p) => p !== departingId && panels[p].visible && panels[p].zone === zone);
+  const other = Object.keys(panels).find((p) => p !== departingId && panels[p].visible && panels[p].zone === zone);
   if (other) next[zone] = other;
   else delete next[zone];
   return next;
@@ -132,7 +186,7 @@ export const useDockStore = create<DockState>((set, get) => ({
 
   load: async () => {
     const saved = await getStoredValue<StoredLayout>(STORAGE_KEY);
-    set({ ...(saved ?? DEFAULT_LAYOUT), loaded: true });
+    set({ ...(saved ? stripStaleExtensionPanels(saved) : DEFAULT_LAYOUT), loaded: true });
   },
 
   setDraggingPanel: (id) => set({ draggingPanel: id, pointerPosition: id ? get().pointerPosition : null }),
@@ -162,7 +216,7 @@ export const useDockStore = create<DockState>((set, get) => ({
     // force-open a panel the user never asked for (e.g. dropping the
     // Terminal tab on its own lone edge summoning a hidden Copilot).
     const { panels } = get();
-    const otherPanel = PANEL_IDS.find((p) => p !== draggedId && panels[p].visible && panels[p].zone === zone);
+    const otherPanel = Object.keys(panels).find((p) => p !== draggedId && panels[p].visible && panels[p].zone === zone);
     if (!otherPanel) return;
     const direction: SplitDirection = edge === 'left' || edge === 'right' ? 'row' : 'column';
     const draggedFirst = edge === 'top' || edge === 'left';
@@ -219,9 +273,35 @@ export const useDockStore = create<DockState>((set, get) => ({
     set((state) => ({ activeByZone: { ...state.activeByZone, [zone]: id } }));
     persist(get);
   },
+
+  registerPanel: (id, defaultZone) => {
+    set((state) => {
+      const existing = state.panels[id];
+      const zone = existing?.zone ?? defaultZone;
+      const panels = { ...state.panels, [id]: { zone, visible: true } };
+      return { panels, activeByZone: { ...state.activeByZone, [zone]: id } };
+    });
+    persist(get);
+  },
+
+  unregisterPanel: (id) => {
+    set((state) => {
+      const current = state.panels[id];
+      if (!current) return state;
+      const panels = { ...state.panels };
+      delete panels[id];
+      const activeByZone = reassignActiveInZone(state.panels, state.activeByZone, current.zone, id);
+      const splitByZone = { ...state.splitByZone };
+      // A split zone always has exactly two occupants — losing one means
+      // there's nothing left to split against.
+      if (splitByZone[current.zone]?.order.includes(id)) delete splitByZone[current.zone];
+      return { panels, activeByZone, splitByZone };
+    });
+    persist(get);
+  },
 }));
 
 /** Panels currently visible and docked to `zone`, in a stable order. */
 export function panelsInZone(panels: Record<PanelId, PanelPlacement>, zone: DockZone): PanelId[] {
-  return PANEL_IDS.filter((id) => panels[id].visible && panels[id].zone === zone);
+  return Object.keys(panels).filter((id) => panels[id].visible && panels[id].zone === zone);
 }

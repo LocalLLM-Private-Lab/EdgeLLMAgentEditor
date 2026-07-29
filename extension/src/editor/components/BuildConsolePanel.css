@@ -1,0 +1,14 @@
+.build-console-panel {
+  height: 100%;
+  width: 100%;
+  background: #0c0c0c;
+  color: #ccc;
+  font-family: monospace;
+  font-size: 12px;
+  padding: 10px;
+  overflow-y: auto;
+}
+
+.build-console-empty {
+  opacity: 0.5;
+}

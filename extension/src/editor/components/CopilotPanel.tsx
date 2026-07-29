@@ -120,9 +120,12 @@ function QuickRequestPanel({ analysisOnly, visible }: QuickRequestPanelProps) {
     const resolved = await resolveWorkspaceFiles(rootHandle, files);
     const resolvedFiles = await Promise.all(
       [...resolved.entries()].map(async ([path, node]) => {
-        // Prefer the live editor buffer over disk in case it's unsaved.
+        // Prefer the live editor buffer over disk in case it's unsaved —
+        // image tabs have no text buffer at all, so fall back to disk same
+        // as if it weren't open (not meaningfully "text" either way).
         const openTab = openFiles.find((f) => f.pathSegments.join('/') === path);
-        const content = openTab ? openTab.model.getValue() : await readFileText(node.handle as FileSystemFileHandle);
+        const content =
+          openTab?.model?.getValue() ?? (await readFileText(node.handle as FileSystemFileHandle));
         return { path, content };
       }),
     );

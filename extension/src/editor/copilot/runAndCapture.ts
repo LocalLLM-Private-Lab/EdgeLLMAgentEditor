@@ -43,7 +43,7 @@ export async function runAndCapture(command: string, label: string): Promise<Run
     let output = '';
 
     const unsubscribe = useTerminalStore.getState().subscribe((msg) => {
-      if (!sessionId || msg.session_id !== sessionId) return;
+      if (!sessionId || !('session_id' in msg) || msg.session_id !== sessionId) return;
       if (msg.type === 'stdout') {
         output += decoder.decode(base64ToBytes(msg.data), { stream: true });
       } else if (msg.type === 'exited') {

@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { v4 as uuid } from 'uuid';
 import {
   usePromptTemplateStore,
@@ -10,19 +10,24 @@ import { DEFAULT_PLAN_PROMPT_TEMPLATE, DEFAULT_STEP_PROMPT_TEMPLATE } from '../c
 import { useRunCommandStore, type RunCommandMap } from '../state/runCommandStore';
 import { useNamedCommandStore, type NamedCommandMap } from '../state/namedCommandStore';
 import { useKeybindingStore, type KeybindingMode } from '../state/keybindingStore';
+import { useExtensionsStore, type InstalledExtension } from '../state/extensionsStore';
+import { makeExtensionSettingsCategory, parseExtensionSettingsCategory } from '../extensions/extensionSettingsCategory';
+import { ExtensionConfigFields } from './ExtensionConfigFields';
 import './DiffViewModal.css';
 import './PromptTemplateSettingsModal.css';
 import './RunCommandSettingsModal.css';
 import './SettingsModal.css';
 
-export type SettingsCategory =
-  | 'keybinding'
-  | 'promptTemplates'
-  | 'planTemplates'
-  | 'runCommands'
-  | 'namedCommands';
+type BuiltinSettingsCategory = 'keybinding' | 'promptTemplates' | 'planTemplates' | 'runCommands' | 'namedCommands';
+/** Built-in categories are fixed; an installed extension's own
+ * `contributes.configuration` gets a dynamic category
+ * (`ext:<extensionId>`, see extensionSettingsCategory.ts) added to the nav
+ * at render time — widened to a plain string rather than a closed union
+ * since the full set can't be known ahead of time (mirrors dockStore.ts's
+ * PanelId widening for the same reason). */
+export type SettingsCategory = BuiltinSettingsCategory | string;
 
-const CATEGORY_LABELS: Record<SettingsCategory, string> = {
+const CATEGORY_LABELS: Record<BuiltinSettingsCategory, string> = {
   keybinding: 'キーバインド',
   promptTemplates: '単発プロンプトテンプレート',
   planTemplates: '計画プロンプトテンプレート',
@@ -30,11 +35,19 @@ const CATEGORY_LABELS: Record<SettingsCategory, string> = {
   namedCommands: '名前付きコマンド',
 };
 
+/** Built-ins use the static table above; an extension's settings category
+ * has no static label — shows the owning extension's displayName instead. */
+function categoryLabel(id: SettingsCategory, extensions: InstalledExtension[]): string {
+  const extId = parseExtensionSettingsCategory(id);
+  if (!extId) return CATEGORY_LABELS[id as BuiltinSettingsCategory] ?? id;
+  return extensions.find((e) => e.id === extId)?.displayName ?? extId;
+}
+
 // Grouped like VS Code's own nav (a bold group label over its category
 // buttons) — keybinding and the run-command mappings are editor/workspace-
 // wide preferences, not Copilot ones, so they sit under 一般; only the
 // prompt-template settings are actually Copilot-specific.
-const NAV_GROUPS: { label: string; items: SettingsCategory[] }[] = [
+const STATIC_NAV_GROUPS: { label: string; items: SettingsCategory[] }[] = [
   { label: '一般', items: ['keybinding', 'runCommands', 'namedCommands'] },
   { label: 'Copilot', items: ['promptTemplates', 'planTemplates'] },
 ];
@@ -75,8 +88,10 @@ const AUTO_SAVE_DEBOUNCE_MS = 500;
  * write doesn't fire on every keystroke), while still exposing `flush` for
  * discrete actions (add/delete/reset) and for closing the modal — VS
  * Code's settings apply instantly with no explicit Save button, so nothing
- * here may be silently lost when the modal closes. */
-function useDebouncedSave<T>(save: (value: T) => Promise<void>) {
+ * here may be silently lost when the modal closes. Exported so
+ * ExtensionSettingsModal.tsx can reuse the same auto-save UX instead of
+ * re-implementing it. */
+export function useDebouncedSave<T>(save: (value: T) => Promise<void>) {
   const timerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const pendingRef = useRef<{ value: T } | null>(null);
 
@@ -152,6 +167,19 @@ export function SettingsModal({ initialCategory, onClose }: { initialCategory: S
   const keybindingMode = useKeybindingStore((s) => s.mode);
   const setKeybindingMode = useKeybindingStore((s) => s.setMode);
 
+  const installedExtensions = useExtensionsStore((s) => s.extensions);
+  const extensionsWithSettings = useMemo(
+    () => installedExtensions.filter((e) => e.configSchema.length > 0),
+    [installedExtensions],
+  );
+  const navGroups = useMemo(() => {
+    if (extensionsWithSettings.length === 0) return STATIC_NAV_GROUPS;
+    return [
+      ...STATIC_NAV_GROUPS,
+      { label: '拡張機能', items: extensionsWithSettings.map((e) => makeExtensionSettingsCategory(e.id)) },
+    ];
+  }, [extensionsWithSettings]);
+
   function handleClose() {
     promptSave.flush();
     planSave.flush();
@@ -201,11 +229,13 @@ export function SettingsModal({ initialCategory, onClose }: { initialCategory: S
   }
 
   const visibleNavGroups = searchLower
-    ? NAV_GROUPS.map((g) => ({
-        ...g,
-        items: g.items.filter((id) => CATEGORY_LABELS[id].toLowerCase().includes(searchLower)),
-      })).filter((g) => g.items.length > 0)
-    : NAV_GROUPS;
+    ? navGroups
+        .map((g) => ({
+          ...g,
+          items: g.items.filter((id) => categoryLabel(id, installedExtensions).toLowerCase().includes(searchLower)),
+        }))
+        .filter((g) => g.items.length > 0)
+    : navGroups;
   const visibleCategoryIds = visibleNavGroups.flatMap((g) => g.items);
   useEffect(() => {
     if (visibleCategoryIds.length > 0 && !visibleCategoryIds.includes(category)) {
@@ -283,7 +313,7 @@ export function SettingsModal({ initialCategory, onClose }: { initialCategory: S
                     className={`settings-nav-item ${category === id ? 'active' : ''}`}
                     onClick={() => setCategory(id)}
                   >
-                    {CATEGORY_LABELS[id]}
+                    {categoryLabel(id, installedExtensions)}
                   </button>
                 ))}
               </div>
@@ -475,6 +505,15 @@ export function SettingsModal({ initialCategory, onClose }: { initialCategory: S
                 </button>
               </div>
             </div>
+            {extensionsWithSettings.map((ext) => (
+              <div
+                key={ext.id}
+                className="prompt-template-body"
+                style={{ display: category === makeExtensionSettingsCategory(ext.id) ? 'flex' : 'none' }}
+              >
+                <ExtensionConfigFields extension={ext} />
+              </div>
+            ))}
           </div>
         </div>
       </div>

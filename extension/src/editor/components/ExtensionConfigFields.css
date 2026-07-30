@@ -35,3 +35,22 @@
   color: var(--danger-fg);
   margin: 4px 0 0;
 }
+
+/* VS Code marks a setting changed from its default with a colored bar down
+ * the row's left edge — same signal here, via the same accent color used
+ * elsewhere for "this is active/selected" state. */
+.settings-row-modified {
+  position: relative;
+  padding-left: 10px;
+}
+
+.settings-row-modified::before {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 2px;
+  bottom: 2px;
+  width: 2px;
+  background: var(--accent-color);
+  border-radius: 1px;
+}

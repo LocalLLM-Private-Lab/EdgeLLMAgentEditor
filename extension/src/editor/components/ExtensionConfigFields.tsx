@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from 'react';
+import { useMemo, useState, type ReactNode } from 'react';
 import type { InstalledExtension, ConfigPropertySchema } from '../state/extensionsStore';
 import { useExtensionsStore } from '../state/extensionsStore';
 import { updateExtensionConfig } from '../extensions/extensionHostClient';
@@ -53,10 +53,15 @@ function ConfigField({ extensionId, schema, value, active }: ConfigFieldProps) {
   // only reflects a save ~500ms after the last keystroke, so binding the
   // input directly to it would fight the user's typing (each keystroke
   // getting overwritten back to the stale committed value).
+  // An unset value should show the schema's own default (VS Code always
+  // pre-fills a setting's real default rather than an empty box) — every
+  // branch here needs its own `?? schema.default` fallback since each
+  // shapes the value differently before it's ready to display.
   const [textDraft, setTextDraft] = useState(() => {
-    if (kind === 'stringArray') return stringifyArray(value);
+    if (kind === 'stringArray') return stringifyArray(value ?? schema.default);
     if (kind === 'json') return JSON.stringify(value ?? schema.default ?? null, null, 2);
-    return value === undefined || value === null ? '' : String(value);
+    const effective = value ?? schema.default;
+    return effective === undefined || effective === null ? '' : String(effective);
   });
 
   function resetToDefault() {
@@ -160,13 +165,21 @@ function ConfigField({ extensionId, schema, value, active }: ConfigFieldProps) {
     );
   }
 
+  // VS Code marks a setting as "modified" (colored bar + reset action)
+  // only once it's actually been changed from its declared default —
+  // matched here via a JSON comparison since values can be arrays/objects,
+  // not just primitives.
+  const isModified = value !== undefined && JSON.stringify(value) !== JSON.stringify(schema.default);
+
   return (
-    <div className="settings-row" title={schema.key}>
+    <div className={`settings-row ${isModified ? 'settings-row-modified' : ''}`} title={schema.key}>
       <div className="settings-row-label-with-action">
         {kind !== 'boolean' && <span className="settings-row-label">{fieldLabel(schema.key)}</span>}
-        <button className="settings-reset-btn" onClick={resetToDefault} title="既定値に戻す">
-          既定値に戻す
-        </button>
+        {isModified && (
+          <button className="settings-reset-btn" onClick={resetToDefault} title="既定値に戻す">
+            既定値に戻す
+          </button>
+        )}
       </div>
       {schema.description ? (
         <p className="settings-row-description">{schema.description}</p>
@@ -197,6 +210,17 @@ export function ExtensionConfigFields({ extension }: { extension: InstalledExten
   const configValues = useExtensionsStore((s) => s.configValues[extension.id] ?? EMPTY_CONFIG);
   const active = useExtensionsStore((s) => s.status[extension.id]?.kind === 'active');
 
+  // VS Code's own Settings UI always lists properties alphabetically by
+  // key regardless of their declaration order in package.json (confirmed
+  // against a real extension: its raw contributes.configuration.properties
+  // order and VS Code's rendered order don't match, but a plain key sort
+  // does) — sorted here at render time rather than once at install so it
+  // also fixes the order for extensions installed before this existed.
+  const sortedSchema = useMemo(
+    () => [...extension.configSchema].sort((a, b) => a.key.localeCompare(b.key)),
+    [extension.configSchema],
+  );
+
   if (extension.configSchema.length === 0) {
     return <p className="settings-row-description">この拡張機能には設定項目がありません。</p>;
   }
@@ -207,7 +231,7 @@ export function ExtensionConfigFields({ extension }: { extension: InstalledExten
   // category is currently selected.
   return (
     <>
-      {extension.configSchema.map((schema) => (
+      {sortedSchema.map((schema) => (
         <ConfigField
           key={schema.key}
           extensionId={extension.id}

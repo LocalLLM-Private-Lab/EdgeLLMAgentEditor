@@ -64,7 +64,10 @@ jobs:
           components: rustfmt, clippy
 
       - name: Install Linux GUI build dependencies
-        if: runner.os == 'Linux' && matrix.project == 'lsp-host'
+        # Both lsp-host and terminal-host depend on rfd (native folder/file
+        # picker), which pulls in wayland-sys on Linux — its build script
+        # needs pkg-config + libwayland-dev to find the wayland headers.
+        if: runner.os == 'Linux'
         run: |
           sudo apt-get update
           sudo apt-get install --no-install-recommends -y pkg-config libwayland-dev

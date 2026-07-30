@@ -72,9 +72,9 @@ async fn main() -> anyhow::Result<()> {
     println!("  (paste the WebSocket URL and token into the extension's settings panel)");
     println!();
     println!("  new terminals default to: {cwd}");
-    println!("  (this process's own launch directory, unless the extension has a real");
-    println!("   project path via .m365ce/config — see the \"フォルダを選択\" guidance banner");
-    println!("   in the terminal panel, or ws_server.rs's PickWorkspaceRoot)");
+    println!("  (this process's own launch directory, unless the extension sends an");
+    println!("   explicit cwd — it does once the workspace's real OS path is registered");
+    println!("   via the \"ワークスペースの実パスを登録\" banner/command in the app's UI)");
     println!();
     println!("  exits itself shortly after the last connected client disconnects");
 

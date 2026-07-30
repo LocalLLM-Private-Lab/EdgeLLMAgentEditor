@@ -70,8 +70,15 @@ export function TerminalPanel() {
         result.status === 'started' ? '起動しました。接続しています...' : '既に起動しています。接続しています...',
       );
     } else if (result.status === 'unavailable') {
+      // result.message is chrome.runtime.lastError.message — the browser's
+      // own reason (host manifest not found, path in the manifest doesn't
+      // resolve, extension id not in allowed_origins, ...). Previously
+      // discarded in favor of a single generic message, which told users
+      // to re-run setup.js even when they already had — hiding exactly the
+      // detail needed to tell "never registered" apart from "registered
+      // but broken somehow".
       setLaunchMessage(
-        '未登録です。"node setup/setup.js" を一度実行してください。',
+        `未登録または起動できません: ${result.message || '(詳細不明)'} — 解決しない場合は "node setup/setup.js" を再実行してください。`,
       );
     } else if (result.status === 'timeout') {
       setLaunchMessage(
@@ -94,6 +101,14 @@ export function TerminalPanel() {
       } else if (msg.type === 'error') {
         // eslint-disable-next-line no-console
         console.error('terminal-host error:', msg.message);
+        // Previously this only reached devtools console — a session that
+        // failed to spawn (e.g. no shell found, ConPTY unavailable) left
+        // behind a blank terminal tab with no visible explanation at all.
+        // Write it directly into the session's own xterm, since that's the
+        // one place the user is already looking when a new terminal "does
+        // nothing".
+        const session = msg.session_id ? sessionsRef.current.get(msg.session_id) : undefined;
+        session?.term.write(`\r\n\x1b[91m[エラー] ターミナルを起動できませんでした: ${msg.message}\x1b[0m\r\n`);
       }
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps

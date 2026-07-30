@@ -34,18 +34,18 @@ fn clamp_dimension(value: u16) -> u16 {
     value.max(1)
 }
 
-/// Used whenever `OpenSession.cwd` is absent — the common case is still
-/// that the extension has no real OS path to send at all (there is no
-/// browser API that exposes one for a File System Access handle, by
-/// deliberate design — see docs/protocol.md), so the expected usage
-/// remains launching this host from within the project folder itself, its
-/// own launch directory already being the right cwd with zero prompting.
-/// (The extension *can* send an explicit `cwd` when it managed to read
-/// `.m365ce/config` back out of the open workspace — see
-/// `write_workspace_marker` in main.rs and extension/src/editor/fs/
-/// workspaceRealPath.ts — but that only covers the workspace that marker
-/// was written into.) Falls back to the system drive root only if the
-/// launch directory can't be read.
+/// Used whenever `OpenSession.cwd` is absent or invalid on this machine —
+/// the common case is still that the extension has no real OS path to send
+/// at all (there is no browser API that exposes one for a File System
+/// Access handle, by deliberate design — see docs/protocol.md), so the
+/// expected usage remains launching this host from within the project
+/// folder itself, its own launch directory already being the right cwd
+/// with zero prompting. (The extension *can* send an explicit `cwd` once
+/// the workspace's real OS path has been registered — see
+/// extension/src/editor/state/workspaceStore.ts's `setWorkspaceRealPath`
+/// and `.m365ce/config` — but that path is only as fresh as whenever it
+/// was registered; see the cwd fallback in `spawn` below.) Falls back to
+/// the system drive root only if the launch directory can't be read.
 fn default_cwd() -> String {
     if let Ok(dir) = std::env::current_dir() {
         return dir.to_string_lossy().into_owned();
@@ -80,7 +80,19 @@ impl PtySession {
         })?;
 
         let mut cmd = CommandBuilder::new(shell.unwrap_or_else(default_shell));
-        cmd.cwd(cwd.unwrap_or_else(default_cwd));
+        // `cwd` (when present) came from the workspace's own `.m365ce/config`
+        // marker, which is a plain file living inside the opened project
+        // folder — if that folder was ever copied (not git-cloned; the
+        // marker is gitignored) to a different machine, or just moved, the
+        // path it records can point at a directory that no longer exists
+        // here. Spawning straight into a dead cwd fails the whole session
+        // with no PTY at all, so a stale/invalid cwd is treated the same as
+        // an absent one rather than failing outright.
+        let resolved_cwd = match cwd {
+            Some(dir) if std::path::Path::new(&dir).is_dir() => dir,
+            _ => default_cwd(),
+        };
+        cmd.cwd(resolved_cwd);
 
         let child = pair.slave.spawn_command(cmd)?;
         let pid = child.process_id().unwrap_or(0);

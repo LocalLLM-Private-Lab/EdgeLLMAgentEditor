@@ -225,8 +225,16 @@ impl ExtHostProcess {
         // is terminal-host's own install directory, never the user's real
         // project (see protocol.rs's `ExtHostActivate.workspace_root` doc
         // comment). `None` (workspace never linked yet) leaves the old
-        // behavior in place rather than failing the spawn outright.
-        if let Some(root) = &workspace_root {
+        // behavior in place rather than failing the spawn outright — same
+        // treatment for a `Some` root that no longer exists on this machine
+        // (e.g. the workspace folder's `.m365ce/config` marker was copied
+        // over from a different machine — see pty_session.rs's identical
+        // fallback for `OpenSession.cwd`), since failing the spawn outright
+        // would silently break every extension rather than just losing the
+        // cwd hint.
+        if let Some(root) = &workspace_root
+            && std::path::Path::new(root).is_dir()
+        {
             command.current_dir(root);
         }
 

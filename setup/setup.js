@@ -40,8 +40,22 @@ function log(message) {
   console.log(`[setup] ${message}`);
 }
 
+// With `shell: true` on Windows, Node hands args to cmd.exe already
+// concatenated — it does NOT quote them for you (Node itself warns about
+// this: "arguments are not escaped, only concatenated"). Any arg containing
+// a space (e.g. reg.exe's /d value, built from REPO_ROOT — broken on any
+// checkout path with a space in it, such as a Windows username with a
+// space, "OneDrive - ..." sync folders, etc.) silently splits into extra
+// tokens and corrupts the command. Windows paths can never contain a
+// literal double quote, so a plain wrap-if-it-has-whitespace is sufficient.
+function quoteArgForWindowsShell(arg) {
+  return /\s/.test(arg) ? `"${arg}"` : arg;
+}
+
 function run(cmd, args, cwd) {
-  const result = spawnSync(cmd, args, { cwd, stdio: 'inherit', shell: process.platform === 'win32' });
+  const shell = process.platform === 'win32';
+  const safeArgs = shell ? args.map(quoteArgForWindowsShell) : args;
+  const result = spawnSync(cmd, safeArgs, { cwd, stdio: 'inherit', shell });
   if (result.status !== 0) {
     throw new Error(`${cmd} ${args.join(' ')} failed (exit code ${result.status})`);
   }

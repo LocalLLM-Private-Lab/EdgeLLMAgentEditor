@@ -124,7 +124,14 @@ async function resolveLocationToMonaco(loc: LspLocation): Promise<{ uri: monaco.
   } catch {
     return null;
   }
-  if (!segments) return null;
+  if (!segments) {
+    // Outside the FSA workspace (e.g. Rust/Python stdlib source, or a
+    // TypeScript lib.d.ts not under node_modules) — fetch it via lsp-host's
+    // own filesystem access into a read-only tab instead of dropping the
+    // location.
+    const tab = await useEditorTabsStore.getState().openExternalFile(loc.uri);
+    return tab?.model ? { uri: tab.model.uri, range: lspRangeToMonaco(loc.range) } : null;
+  }
 
   const tabsState = useEditorTabsStore.getState();
   const existing = tabsState.openFiles.find((f) => f.pathSegments.join('/') === segments.join('/'));
@@ -351,6 +358,20 @@ export function ensureLspProvidersRegistered(): void {
   if (registered) return;
   registered = true;
 
+  function revealInOpener(
+    source: monaco.editor.ICodeEditor,
+    selectionOrPosition: monaco.IRange | monaco.IPosition | undefined,
+  ): void {
+    if (!selectionOrPosition) return;
+    if ('startLineNumber' in selectionOrPosition) {
+      source.setSelection(selectionOrPosition);
+      source.revealRangeInCenter(selectionOrPosition);
+    } else {
+      source.setPosition(selectionOrPosition);
+      source.revealPositionInCenter(selectionOrPosition);
+    }
+  }
+
   monaco.editor.registerEditorOpener({
     openCodeEditor: async (source, resource, selectionOrPosition) => {
       const rootUri = useLspStore.getState().rootUri;
@@ -361,7 +382,17 @@ export function ensureLspProvidersRegistered(): void {
       } catch {
         return false;
       }
-      if (!segments) return false;
+      if (!segments) {
+        // Outside the FSA workspace — the references peek view in
+        // particular routes exclusively through this opener (see
+        // toReferenceLocation's comment below), so this is the only place
+        // clicking such a result can actually open it.
+        const tab = await useEditorTabsStore.getState().openExternalFile(resource.toString());
+        if (!tab?.model) return false;
+        source.setModel(tab.model);
+        revealInOpener(source, selectionOrPosition);
+        return true;
+      }
       const rootHandle = useWorkspaceStore.getState().rootHandle;
       if (!rootHandle) return false;
 
@@ -377,15 +408,7 @@ export function ensureLspProvidersRegistered(): void {
       if (!opened?.model) return false; // an image tab has no model to navigate into
 
       source.setModel(opened.model);
-      if (selectionOrPosition) {
-        if ('startLineNumber' in selectionOrPosition) {
-          source.setSelection(selectionOrPosition);
-          source.revealRangeInCenter(selectionOrPosition);
-        } else {
-          source.setPosition(selectionOrPosition);
-          source.revealPositionInCenter(selectionOrPosition);
-        }
-      }
+      revealInOpener(source, selectionOrPosition);
       return true;
     },
   });

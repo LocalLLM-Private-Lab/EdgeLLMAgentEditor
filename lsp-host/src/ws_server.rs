@@ -77,6 +77,20 @@ fn default_root_dir() -> PathBuf {
     std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."))
 }
 
+/// Reads the file a `file://` URI points at, for `ClientMessage::ReadFile`.
+/// Bytes that aren't valid UTF-8 are lossily decoded rather than failing the
+/// whole request — source files worth jumping to (stdlib, npm packages) are
+/// effectively always UTF-8, and a best-effort view beats none for the rare
+/// exception.
+fn read_file_content(uri: &str) -> Result<String, String> {
+    let url = url::Url::parse(uri).map_err(|err| err.to_string())?;
+    let path = url
+        .to_file_path()
+        .map_err(|()| "not a file:// URI".to_string())?;
+    let bytes = std::fs::read(&path).map_err(|err| err.to_string())?;
+    Ok(String::from_utf8_lossy(&bytes).into_owned())
+}
+
 fn python_venv_name(root_dir: &Path) -> Option<String> {
     for name in [".venv", "venv", "env"] {
         let venv_dir = root_dir.join(name);
@@ -470,7 +484,7 @@ fn install_npm(packages: &'static [&'static str], executable: &'static str) -> a
 
 fn install_gem(package: &'static str) -> anyhow::Result<()> {
     let gem = resolve_program("gem")?;
-    run_program(
+    let result = run_program(
         &gem,
         &[
             "install".into(),
@@ -479,7 +493,23 @@ fn install_gem(package: &'static str) -> anyhow::Result<()> {
             package.into(),
         ],
         None,
-    )?;
+    );
+    // Some RubyGems setups (e.g. RubyInstaller for Windows) bake a
+    // `--install-dir` default into every `gem` invocation via their own
+    // OperatingSystemDefaults, already redirecting installs to a per-user
+    // directory. Our explicit --user-install then collides with that
+    // default and RubyGems refuses both at once, so retry without it.
+    if let Err(err) = &result
+        && err.to_string().contains("--install-dir or --user-install")
+    {
+        run_program(
+            &gem,
+            &["install".into(), "--no-document".into(), package.into()],
+            None,
+        )?;
+        return Ok(());
+    }
+    result?;
     Ok(())
 }
 
@@ -836,6 +866,30 @@ async fn handle_socket(socket: WebSocket, active_connections: Arc<AtomicUsize>) 
                 for (_, mut active) in sessions.lock().await.drain() {
                     let _ = active.server.kill();
                 }
+            }
+            ClientMessage::ReadFile { id, uri } => {
+                let out_tx2 = out_tx.clone();
+                tokio::spawn(async move {
+                    let msg =
+                        match tokio::task::spawn_blocking(move || read_file_content(&uri)).await {
+                            Ok(Ok(content)) => ServerMessage::FileContent {
+                                id,
+                                content: Some(content),
+                                error: None,
+                            },
+                            Ok(Err(err)) => ServerMessage::FileContent {
+                                id,
+                                content: None,
+                                error: Some(err),
+                            },
+                            Err(join_err) => ServerMessage::FileContent {
+                                id,
+                                content: None,
+                                error: Some(join_err.to_string()),
+                            },
+                        };
+                    let _ = out_tx2.send(msg);
+                });
             }
         }
     }

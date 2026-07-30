@@ -32,6 +32,16 @@ pub enum ClientMessage {
         language: String,
     },
     CloseSession,
+    /// Reads an arbitrary file by its `file://` URI and returns its content
+    /// as `FileContent`, correlated by `id`. Exists for definition/hover
+    /// targets outside the browser's FSA-granted workspace (e.g. Rust's
+    /// standard library source, or a Python interpreter's own stdlib) —
+    /// this host has no FSA sandbox, so it can read them directly, while the
+    /// browser cannot. Not scoped to any language session.
+    ReadFile {
+        id: u64,
+        uri: String,
+    },
 }
 
 /// Messages sent from this host back to the extension.
@@ -72,5 +82,12 @@ pub enum ServerMessage {
     },
     Error {
         message: String,
+    },
+    /// Reply to `ClientMessage::ReadFile`, correlated by `id`. Exactly one of
+    /// `content`/`error` is set.
+    FileContent {
+        id: u64,
+        content: Option<String>,
+        error: Option<String>,
     },
 }

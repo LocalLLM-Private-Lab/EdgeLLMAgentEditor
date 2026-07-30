@@ -75,6 +75,12 @@ interface LspState {
     position: { line: number; character: number },
   ) => Promise<unknown>;
   requestHover: (language: string, uri: string, position: { line: number; character: number }) => Promise<unknown>;
+  /** Reads an arbitrary file by its `file://` URI via lsp-host's own
+   * filesystem access — for definition/hover targets outside the browser's
+   * FSA-granted workspace (e.g. Rust/Python standard library source). See
+   * uriToPathSegments's doc comment for why the browser can't just open
+   * these itself. */
+  requestFileContent: (uri: string) => Promise<string>;
 }
 
 // The WebSocket is shared, while each language gets an independent server
@@ -91,6 +97,7 @@ const pendingRequests = new Map<
   number,
   { language: string; method: string; resolve: (value: unknown) => void; reject: (err: Error) => void }
 >();
+const pendingFileReads = new Map<number, { resolve: (content: string) => void; reject: (err: Error) => void }>();
 let rustBuildScriptsDisabled = false;
 const rustFallbackRestarting = new Set<string>();
 const indexingLanguages = new Set<string>();
@@ -293,6 +300,18 @@ function sendRequest(language: string, method: string, params: unknown): Promise
 
 function sendNotification(language: string, method: string, params: unknown): void {
   client?.send({ type: 'lsp', language, payload: { jsonrpc: '2.0', method, params } });
+}
+
+function requestFileContentImpl(uri: string): Promise<string> {
+  return new Promise((resolve, reject) => {
+    if (!client) {
+      reject(new Error('LSP session is not connected'));
+      return;
+    }
+    const id = nextRequestId++;
+    pendingFileReads.set(id, { resolve, reject });
+    client.send({ type: 'read_file', id, uri });
+  });
 }
 
 interface PublishDiagnosticsParams {
@@ -550,6 +569,14 @@ function handleServerMessage(msg: ServerMessage, set: (partial: Partial<LspState
       }
       break;
     }
+    case 'file_content': {
+      const pending = pendingFileReads.get(msg.id);
+      if (!pending) break;
+      pendingFileReads.delete(msg.id);
+      if (msg.content !== null) pending.resolve(msg.content);
+      else pending.reject(new Error(msg.error ?? 'Failed to read file'));
+      break;
+    }
   }
 }
 
@@ -802,4 +829,5 @@ export const useLspStore = create<LspState>((set, get) => ({
     sendRequest(language, 'textDocument/signatureHelp', { textDocument: { uri }, position }),
   requestHover: (language, uri, position) =>
     sendRequest(language, 'textDocument/hover', { textDocument: { uri }, position }),
+  requestFileContent: (uri) => requestFileContentImpl(uri),
 }));

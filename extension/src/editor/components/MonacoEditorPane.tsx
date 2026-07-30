@@ -515,6 +515,11 @@ export function MonacoEditorPane({ groupId }: { groupId: string }) {
     if (!editor) return;
     const activeTab = openFiles.find((f) => f.id === groupActiveFileId);
     editor.setModel(activeTab?.model ?? null);
+    // Read-only: fetched via lsp-host for a definition/hover target outside
+    // the FSA workspace (e.g. Rust/Python stdlib source) — there's no
+    // fileHandle to save it back to (see editorTabsStore.ts's
+    // loadExternalFile).
+    editor.updateOptions({ readOnly: activeTab?.kind === 'external-text' });
   }, [groupActiveFileId, openFiles]);
 
   // Applies the selected vim/emacs input-intercept layer on top of the

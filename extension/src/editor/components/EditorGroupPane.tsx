@@ -1,5 +1,6 @@
 import { useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
-import { useEditorTabsStore, tabsInGroup } from '../state/editorTabsStore';
+import * as monaco from 'monaco-editor';
+import { useEditorTabsStore, tabsInGroup, type EditorTab } from '../state/editorTabsStore';
 import { useWorkspaceStore } from '../state/workspaceStore';
 import { useExtensionsStore } from '../state/extensionsStore';
 import { useDismissOnOutsideClick } from '../hooks/useDismissOnOutsideClick';
@@ -12,6 +13,17 @@ import '../components/MenuBar.css';
 import './EditorGroupPane.css';
 
 const DRAG_THRESHOLD_PX = 4;
+
+/** Absolute path shown as a tab's hover tooltip and copied by the
+ * "パスのコピー"/"相対パスのコピー" context-menu items. An external tab's
+ * pathSegments is just its filename (it isn't under the workspace root at
+ * all — see editorTabsStore.ts's loadExternalFile), so its real filesystem
+ * path comes from its file:// URI instead. */
+function absoluteTabPath(tab: EditorTab): string {
+  if (tab.kind === 'external-text' && tab.externalUri) return monaco.Uri.parse(tab.externalUri).fsPath;
+  const rootName = useWorkspaceStore.getState().rootHandle?.name ?? '';
+  return [rootName, ...tab.pathSegments].join('/');
+}
 
 interface TabContextMenuState {
   x: number;
@@ -26,8 +38,10 @@ interface TabContextMenuState {
 function DraggableFileTab({
   fileId,
   name,
+  path,
   isDirty,
   isPreview,
+  readOnly,
   active,
   onClick,
   onClose,
@@ -35,8 +49,11 @@ function DraggableFileTab({
 }: {
   fileId: string;
   name: string;
+  /** Absolute path shown as the tab's hover tooltip. */
+  path: string;
   isDirty: boolean;
   isPreview: boolean;
+  readOnly: boolean;
   active: boolean;
   onClick: () => void;
   onClose: () => void;
@@ -68,6 +85,7 @@ function DraggableFileTab({
     <div
       className={`editor-tab ${active ? 'active' : ''} ${isPreview ? 'preview' : ''}`}
       data-file-id={fileId}
+      title={path}
       style={{ touchAction: 'none' }}
       onClick={onClick}
       onDoubleClick={() => pinTab(fileId)}
@@ -107,6 +125,9 @@ function DraggableFileTab({
       <span className="editor-tab-name">
         {isDirty ? '● ' : ''}
         {name}
+        {readOnly && (
+          <span className="codicon codicon-lock editor-tab-readonly-icon" title="読み取り専用（ワークスペース外）" />
+        )}
       </span>
       <button
         className="editor-tab-close"
@@ -182,8 +203,10 @@ export function EditorGroupPane({ groupId }: { groupId: string }) {
             key={tab.id}
             fileId={tab.id}
             name={tab.name}
+            path={absoluteTabPath(tab)}
             isDirty={tab.isDirty}
             isPreview={tab.isPreview}
+            readOnly={tab.kind === 'external-text'}
             active={!extensionTabActive && tab.id === activeFileId}
             onClick={() => setActiveFile(tab.id)}
             onClose={() => closeFile(tab.id)}
@@ -238,14 +261,17 @@ export function EditorGroupPane({ groupId }: { groupId: string }) {
             { label: 'すべて閉じる', onClick: () => closeAllTabsInGroup(groupId) },
             {
               label: 'パスのコピー',
-              onClick: () => {
-                const rootName = useWorkspaceStore.getState().rootHandle?.name ?? '';
-                void navigator.clipboard.writeText([rootName, ...menuTab.pathSegments].join('/'));
-              },
+              onClick: () => void navigator.clipboard.writeText(absoluteTabPath(menuTab)),
             },
             {
               label: '相対パスのコピー',
-              onClick: () => void navigator.clipboard.writeText(menuTab.pathSegments.join('/')),
+              onClick: () => {
+                const path =
+                  menuTab.kind === 'external-text' && menuTab.externalUri
+                    ? monaco.Uri.parse(menuTab.externalUri).fsPath
+                    : menuTab.pathSegments.join('/');
+                void navigator.clipboard.writeText(path);
+              },
             },
           ].map((item) => (
             <button

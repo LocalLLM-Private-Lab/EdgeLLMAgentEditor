@@ -17,7 +17,11 @@ export interface OpenFile {
   id: string;
   name: string;
   pathSegments: string[];
-  fileHandle: FileSystemFileHandle;
+  /** Absent only for `kind: 'external-text'` — a read-only tab for a
+   * definition/hover target outside the FSA-granted workspace, fetched via
+   * lsp-host's own filesystem access instead of an FSA handle (see
+   * uriToPathSegments.ts and lspProviders.ts's openExternalFile). */
+  fileHandle?: FileSystemFileHandle;
   modelUri: string;
   isDirty: boolean;
   language: string;
@@ -36,9 +40,14 @@ export interface OpenFile {
    * identity and close/rename, isDirty always false since they're never
    * edited) so tab-strip/close/rename code doesn't need its own branch —
    * only the handful of places that touch `model` or content need to
-   * check `kind`. */
-  kind: 'text' | 'image';
+   * check `kind`. 'external-text' has a model (read-only, unsaveable) but
+   * no fileHandle — see `externalUri` below. */
+  kind: 'text' | 'image' | 'external-text';
   /** Only set when `kind === 'image'` — the file's bytes as a data: URL,
    * handed straight to an `<img>` (see ImageViewerPane.tsx). */
   imageDataUrl?: string;
+  /** Only set when `kind === 'external-text'` — the file:// URI this tab's
+   * content was read from. Also used as the model's own Monaco URI, and as
+   * the dedup key when the same external file is navigated to again. */
+  externalUri?: string;
 }

@@ -36,6 +36,7 @@
 | `lsp` | `language, payload` | 指定言語の生のLSP JSON-RPCオブジェクト(`initialize`/`textDocument/didOpen`等)。ホストは中身を一切解釈せず、その言語サーバーのstdinへ転送する |
 | `restart_session` | `language` | Rustのbuild scriptクラッシュ検知後、同じワークスペースで言語サーバーを再起動する |
 | `close_session` | (なし) | 現在のセッションの言語サーバープロセスを終了 |
+| `read_file` | `id, uri` | 任意の`file://` URIの内容を読む。言語セッションに紐付かない。`id`は応答との対応付け用。FSAワークスペース外の定義ジャンプ先(Rust/Pythonの標準ライブラリソースなど)をホスト自身のファイルシステムアクセスで読むために存在する |
 
 ## メッセージ(ホスト → 拡張機能、`ServerMessage`)
 
@@ -49,6 +50,7 @@
 | `process_exited` | `language, code` | 指定言語の言語サーバープロセスの読み取りループがEOFに達した(v1では `code` は常に `null`) |
 | `rust_analyzer_build_scripts_crashed` | `language` | rust-analyzerのstderrでbuild scriptワーカーのpanicを検知。拡張機能はbuild script無効でセッションを再起動する |
 | `error` | `message` | 上記以外のエラー(未対応言語の指定など) |
+| `file_content` | `id, content?, error?` | `read_file`への応答。`content`/`error`のどちらか一方のみセットされる |
 
 ## 現在利用できるLSP機能
 
@@ -61,6 +63,8 @@
 - ドキュメントシンボル(アウトライン)
 - シグネチャヘルプ(引数ヒント)
 - 診断表示(`textDocument/publishDiagnostics`)
+
+定義/宣言/実装/型定義ジャンプ・参照検索の結果がFSAワークスペース外を指す場合(Rust/Pythonの標準ライブラリソース、ワークスペース外にauto-installされたTypeScriptの`lib.d.ts`など)、`read_file`でホストから内容を取得し、保存不可の読み取り専用タブ(`editorTabsStore.ts`の`kind: 'external-text'`)として開く。このタブはLSPセッションには登録されない(`textDocument/didOpen`を送らない)ため、タブ内でのホバー/定義ジャンプは未対応。
 
 ### 言語サーバーの対応表
 

@@ -37,6 +37,12 @@
   font-style: italic;
 }
 
+.editor-tab-readonly-icon {
+  margin-left: 4px;
+  font-size: 11px;
+  opacity: 0.7;
+}
+
 .editor-tab-close {
   background: none;
   border: none;

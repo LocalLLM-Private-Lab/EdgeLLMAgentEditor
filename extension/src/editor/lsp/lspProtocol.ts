@@ -9,7 +9,8 @@ export type ClientMessage =
   | { type: 'open_session'; language: string; workspace_root?: string }
   | { type: 'lsp'; language: string; payload: unknown }
   | { type: 'restart_session'; language: string }
-  | { type: 'close_session' };
+  | { type: 'close_session' }
+  | { type: 'read_file'; id: number; uri: string };
 
 export type ServerMessage =
   | { type: 'ready'; language: string; root_uri: string; python_venv?: string }
@@ -19,4 +20,5 @@ export type ServerMessage =
   | { type: 'lsp'; language: string; payload: unknown }
   | { type: 'process_exited'; language: string; code: number | null }
   | { type: 'rust_analyzer_build_scripts_crashed'; language: string }
-  | { type: 'error'; message: string };
+  | { type: 'error'; message: string }
+  | { type: 'file_content'; id: number; content: string | null; error: string | null };

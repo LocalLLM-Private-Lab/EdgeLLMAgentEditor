@@ -1,7 +1,6 @@
 use base64::{Engine as _, engine::general_purpose::STANDARD};
-use portable_pty::{Child, CommandBuilder, MasterPty, PtySize, native_pty_system};
+use portable_pty::{ChildKiller, CommandBuilder, MasterPty, PtySize, native_pty_system};
 use std::io::{Read, Write};
-use std::sync::{Arc, Mutex};
 use tokio::sync::mpsc::UnboundedSender;
 
 use crate::protocol::ServerMessage;
@@ -9,10 +8,18 @@ use crate::protocol::ServerMessage;
 pub struct PtySession {
     writer: Box<dyn Write + Send>,
     master: Box<dyn MasterPty + Send>,
-    // Shared with the reader thread, which calls `wait()` on it once it
-    // sees EOF so `Exited` can carry the process's real exit code instead
-    // of always reporting `None`.
-    child: Arc<Mutex<Box<dyn Child + Send + Sync>>>,
+    // Split out via `Child::clone_killer()` specifically so `kill()` below
+    // can signal the process from this struct's owning thread while the
+    // waiter thread (which owns the `Child` itself) is blocked inside its
+    // own `wait()` — the two used to share one `Arc<Mutex<Box<dyn Child>>>`,
+    // which meant `kill()` had to acquire a lock the waiter thread held for
+    // as long as the shell was alive, i.e. exactly until the kill it was
+    // trying to deliver. That deadlocked `kill()` forever for any session
+    // with a live child, which in turn blocked the connection-close cleanup
+    // loop in ws_server.rs from ever reaching the point where it decrements
+    // `active_connections` — so terminal-host.exe never noticed the last
+    // client was gone and never exited on its own.
+    killer: Box<dyn ChildKiller + Send + Sync>,
 }
 
 fn default_shell() -> String {
@@ -94,9 +101,9 @@ impl PtySession {
         };
         cmd.cwd(resolved_cwd);
 
-        let child = pair.slave.spawn_command(cmd)?;
+        let mut child = pair.slave.spawn_command(cmd)?;
         let pid = child.process_id().unwrap_or(0);
-        let child: Arc<Mutex<Box<dyn Child + Send + Sync>>> = Arc::new(Mutex::new(child));
+        let killer = child.clone_killer();
 
         let mut reader = pair.master.try_clone_reader()?;
         let writer = pair.master.take_writer()?;
@@ -137,13 +144,12 @@ impl PtySession {
         // Waiter thread: the sole source of `Exited`. Blocks on the actual
         // process handle (unaffected by the ConPTY pipe quirk above), so it
         // reliably fires whether the shell exited on its own or was killed.
-        let waiter_child = Arc::clone(&child);
+        // Owns `child` outright (moved in) rather than sharing it — nothing
+        // else needs `wait()`/`try_wait()`, and `kill()` goes through the
+        // separately cloned `killer` above instead, so there's no lock for
+        // this thread's blocking wait() to hold against it.
         std::thread::spawn(move || {
-            let exit_code = waiter_child
-                .lock()
-                .ok()
-                .and_then(|mut child| child.wait().ok())
-                .map(|status| status.exit_code() as i32);
+            let exit_code = child.wait().ok().map(|status| status.exit_code() as i32);
             let _ = out_tx.send(ServerMessage::Exited {
                 session_id: session_id.clone(),
                 exit_code,
@@ -154,7 +160,7 @@ impl PtySession {
             Self {
                 writer,
                 master: pair.master,
-                child,
+                killer,
             },
             pid,
         ))
@@ -177,10 +183,7 @@ impl PtySession {
     }
 
     pub fn kill(&mut self) -> anyhow::Result<()> {
-        self.child
-            .lock()
-            .map_err(|_| anyhow::anyhow!("child lock poisoned"))?
-            .kill()?;
+        self.killer.kill()?;
         Ok(())
     }
 }

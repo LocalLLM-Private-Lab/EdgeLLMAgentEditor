@@ -41,12 +41,20 @@ pub fn extension_state_dir(extension_id: &str) -> PathBuf {
 /// manifests are generated per-machine too; nothing here is meant to be
 /// copied to a different machine as a standalone binary).
 fn extension_host_script_path() -> PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("extension-host").join("index.js")
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("extension-host")
+        .join("index.js")
 }
 
 fn sanitize_extension_id(id: &str) -> String {
     id.chars()
-        .map(|c| if c.is_alphanumeric() || c == '.' || c == '-' || c == '_' { c } else { '_' })
+        .map(|c| {
+            if c.is_alphanumeric() || c == '.' || c == '-' || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
         .collect()
 }
 
@@ -70,7 +78,11 @@ pub fn extension_cache_dir(extension_id: &str) -> PathBuf {
 pub fn extension_root_dir(extension_id: &str) -> PathBuf {
     let cache_dir = extension_cache_dir(extension_id);
     let nested = cache_dir.join("extension");
-    if nested.join("package.json").exists() { nested } else { cache_dir }
+    if nested.join("package.json").exists() {
+        nested
+    } else {
+        cache_dir
+    }
 }
 
 /// Unzips a base64-encoded archive (vsix or any zip containing a
@@ -125,8 +137,14 @@ pub fn install_extension(extension_id: &str, archive_base64: &str) -> anyhow::Re
 fn run_open_dialog(options: &serde_json::Value) -> Option<Vec<String>> {
     let title = options.get("title").and_then(|v| v.as_str());
     let default_path = options.get("defaultPath").and_then(|v| v.as_str());
-    let can_select_folders = options.get("canSelectFolders").and_then(|v| v.as_bool()).unwrap_or(false);
-    let can_select_many = options.get("canSelectMany").and_then(|v| v.as_bool()).unwrap_or(false);
+    let can_select_folders = options
+        .get("canSelectFolders")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let can_select_many = options
+        .get("canSelectMany")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
 
     let mut dialog = rfd::FileDialog::new();
     if let Some(title) = title {
@@ -139,7 +157,11 @@ fn run_open_dialog(options: &serde_json::Value) -> Option<Vec<String>> {
         for (name, exts) in filters {
             let extensions: Vec<String> = exts
                 .as_array()
-                .map(|arr| arr.iter().filter_map(|e| e.as_str().map(String::from)).collect())
+                .map(|arr| {
+                    arr.iter()
+                        .filter_map(|e| e.as_str().map(String::from))
+                        .collect()
+                })
                 .unwrap_or_default();
             if extensions.is_empty() {
                 continue;
@@ -160,7 +182,12 @@ fn run_open_dialog(options: &serde_json::Value) -> Option<Vec<String>> {
         (false, false) => dialog.pick_file().map(|p| vec![p]),
     };
 
-    picked.map(|paths| paths.into_iter().map(|p| p.to_string_lossy().into_owned()).collect())
+    picked.map(|paths| {
+        paths
+            .into_iter()
+            .map(|p| p.to_string_lossy().into_owned())
+            .collect()
+    })
 }
 
 pub struct ExtHostProcess {
@@ -252,9 +279,18 @@ impl ExtHostProcess {
 
         let mut child = command.spawn()?;
 
-        let stdin = child.stdin.take().ok_or_else(|| anyhow::anyhow!("failed to open extension host stdin"))?;
-        let stdout = child.stdout.take().ok_or_else(|| anyhow::anyhow!("failed to open extension host stdout"))?;
-        let stderr = child.stderr.take().ok_or_else(|| anyhow::anyhow!("failed to open extension host stderr"))?;
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("failed to open extension host stdin"))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("failed to open extension host stdout"))?;
+        let stderr = child
+            .stderr
+            .take()
+            .ok_or_else(|| anyhow::anyhow!("failed to open extension host stderr"))?;
 
         let (stdin_tx, stdin_rx) = mpsc::channel::<String>();
         {
@@ -293,19 +329,50 @@ impl ExtHostProcess {
                             let commands = value
                                 .get("commands")
                                 .and_then(|v| v.as_array())
-                                .map(|arr| arr.iter().filter_map(|c| c.as_str().map(String::from)).collect())
+                                .map(|arr| {
+                                    arr.iter()
+                                        .filter_map(|c| c.as_str().map(String::from))
+                                        .collect()
+                                })
                                 .unwrap_or_default();
-                            Some(ServerMessage::ExtHostActivated { extension_id: extension_id.clone(), commands })
+                            Some(ServerMessage::ExtHostActivated {
+                                extension_id: extension_id.clone(),
+                                commands,
+                            })
                         }
                         Some("log") => {
-                            let level = value.get("level").and_then(|v| v.as_str()).unwrap_or("info").to_string();
-                            let message = value.get("message").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                            Some(ServerMessage::ExtHostLog { extension_id: extension_id.clone(), level, message })
+                            let level = value
+                                .get("level")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("info")
+                                .to_string();
+                            let message = value
+                                .get("message")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            Some(ServerMessage::ExtHostLog {
+                                extension_id: extension_id.clone(),
+                                level,
+                                message,
+                            })
                         }
                         Some("notification") => {
-                            let level = value.get("level").and_then(|v| v.as_str()).unwrap_or("info").to_string();
-                            let message = value.get("message").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                            Some(ServerMessage::ExtHostNotification { extension_id: extension_id.clone(), level, message })
+                            let level = value
+                                .get("level")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("info")
+                                .to_string();
+                            let message = value
+                                .get("message")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            Some(ServerMessage::ExtHostNotification {
+                                extension_id: extension_id.clone(),
+                                level,
+                                message,
+                            })
                         }
                         Some("error") => {
                             let message = value
@@ -313,11 +380,21 @@ impl ExtHostProcess {
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("unknown error")
                                 .to_string();
-                            Some(ServerMessage::ExtHostError { extension_id: extension_id.clone(), message })
+                            Some(ServerMessage::ExtHostError {
+                                extension_id: extension_id.clone(),
+                                message,
+                            })
                         }
                         Some("config_changed") => {
-                            let key = value.get("key").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                            let msg_value = value.get("value").cloned().unwrap_or(serde_json::Value::Null);
+                            let key = value
+                                .get("key")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let msg_value = value
+                                .get("value")
+                                .cloned()
+                                .unwrap_or(serde_json::Value::Null);
                             Some(ServerMessage::ExtHostConfigChanged {
                                 extension_id: extension_id.clone(),
                                 key,
@@ -325,17 +402,33 @@ impl ExtHostProcess {
                             })
                         }
                         Some("open_settings") => {
-                            let filter = value.get("filter").and_then(|v| v.as_str()).map(String::from);
-                            Some(ServerMessage::ExtHostOpenSettings { extension_id: extension_id.clone(), filter })
+                            let filter = value
+                                .get("filter")
+                                .and_then(|v| v.as_str())
+                                .map(String::from);
+                            Some(ServerMessage::ExtHostOpenSettings {
+                                extension_id: extension_id.clone(),
+                                filter,
+                            })
                         }
                         Some("show_quick_pick") => {
-                            let request_id =
-                                value.get("request_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                            let items = value.get("items").cloned().unwrap_or(serde_json::Value::Array(vec![]));
-                            let place_holder =
-                                value.get("placeHolder").and_then(|v| v.as_str()).map(String::from);
-                            let can_pick_many =
-                                value.get("canPickMany").and_then(|v| v.as_bool()).unwrap_or(false);
+                            let request_id = value
+                                .get("request_id")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let items = value
+                                .get("items")
+                                .cloned()
+                                .unwrap_or(serde_json::Value::Array(vec![]));
+                            let place_holder = value
+                                .get("placeHolder")
+                                .and_then(|v| v.as_str())
+                                .map(String::from);
+                            let can_pick_many = value
+                                .get("canPickMany")
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false);
                             Some(ServerMessage::ExtHostShowQuickPick {
                                 extension_id: extension_id.clone(),
                                 request_id,
@@ -351,9 +444,15 @@ impl ExtHostProcess {
                             // native dialog so the stdout-reader loop keeps
                             // flowing for anything else the extension logs
                             // while the dialog is open.
-                            let request_id =
-                                value.get("request_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                            let options = value.get("options").cloned().unwrap_or(serde_json::Value::Null);
+                            let request_id = value
+                                .get("request_id")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let options = value
+                                .get("options")
+                                .cloned()
+                                .unwrap_or(serde_json::Value::Null);
                             let stdin_tx = stdin_tx.clone();
                             std::thread::spawn(move || {
                                 let paths = run_open_dialog(&options);
@@ -367,13 +466,32 @@ impl ExtHostProcess {
                             None
                         }
                         Some("webview_html") => {
-                            let view_id = value.get("view_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                            let html = value.get("html").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                            Some(ServerMessage::ExtHostWebviewHtml { extension_id: extension_id.clone(), view_id, html })
+                            let view_id = value
+                                .get("view_id")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let html = value
+                                .get("html")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            Some(ServerMessage::ExtHostWebviewHtml {
+                                extension_id: extension_id.clone(),
+                                view_id,
+                                html,
+                            })
                         }
                         Some("webview_message") => {
-                            let view_id = value.get("view_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                            let message = value.get("message").cloned().unwrap_or(serde_json::Value::Null);
+                            let view_id = value
+                                .get("view_id")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            let message = value
+                                .get("message")
+                                .cloned()
+                                .unwrap_or(serde_json::Value::Null);
                             Some(ServerMessage::ExtHostWebviewMessage {
                                 extension_id: extension_id.clone(),
                                 view_id,
@@ -381,8 +499,15 @@ impl ExtHostProcess {
                             })
                         }
                         Some("show_webview") => {
-                            let view_id = value.get("view_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-                            Some(ServerMessage::ExtHostShowWebview { extension_id: extension_id.clone(), view_id })
+                            let view_id = value
+                                .get("view_id")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("")
+                                .to_string();
+                            Some(ServerMessage::ExtHostShowWebview {
+                                extension_id: extension_id.clone(),
+                                view_id,
+                            })
                         }
                         _ => None,
                     };
@@ -418,13 +543,18 @@ impl ExtHostProcess {
     }
 
     pub fn deactivate(&mut self) -> anyhow::Result<()> {
-        self.stdin_tx.send(serde_json::json!({ "type": "deactivate" }).to_string())?;
+        self.stdin_tx
+            .send(serde_json::json!({ "type": "deactivate" }).to_string())?;
         Ok(())
     }
 
     /// Forwards a message from the webview's own content (browser side, via
     /// the sandbox bridge) down to the extension's `onDidReceiveMessage`.
-    pub fn send_webview_message(&mut self, view_id: &str, message: serde_json::Value) -> anyhow::Result<()> {
+    pub fn send_webview_message(
+        &mut self,
+        view_id: &str,
+        message: serde_json::Value,
+    ) -> anyhow::Result<()> {
         self.stdin_tx.send(
             serde_json::json!({ "type": "webview_incoming_message", "view_id": view_id, "message": message })
                 .to_string(),
@@ -434,16 +564,25 @@ impl ExtHostProcess {
 
     /// Pushes a browser-driven settings change into the running process —
     /// see vscode-shim.js's `applyExternalConfigUpdate`.
-    pub fn send_config_update(&mut self, key: &str, value: serde_json::Value) -> anyhow::Result<()> {
-        self.stdin_tx
-            .send(serde_json::json!({ "type": "config_update", "key": key, "value": value }).to_string())?;
+    pub fn send_config_update(
+        &mut self,
+        key: &str,
+        value: serde_json::Value,
+    ) -> anyhow::Result<()> {
+        self.stdin_tx.send(
+            serde_json::json!({ "type": "config_update", "key": key, "value": value }).to_string(),
+        )?;
         Ok(())
     }
 
     /// Pushes the dock panel's real shown/hidden state into the running
     /// process so `webviewView.visible`/`onDidChangeVisibility` reflect
     /// reality — see vscode-shim.js's `applyWebviewVisibilityChange`.
-    pub fn send_webview_visibility_changed(&mut self, view_id: &str, visible: bool) -> anyhow::Result<()> {
+    pub fn send_webview_visibility_changed(
+        &mut self,
+        view_id: &str,
+        visible: bool,
+    ) -> anyhow::Result<()> {
         self.stdin_tx.send(
             serde_json::json!({ "type": "webview_visibility_changed", "view_id": view_id, "visible": visible })
                 .to_string(),
@@ -453,7 +592,11 @@ impl ExtHostProcess {
 
     /// The user's answer to a `vscode.window.showQuickPick(...)` prompt —
     /// see vscode-shim.js's `resolveQuickPick`.
-    pub fn send_quick_pick_result(&mut self, request_id: &str, selected_index: serde_json::Value) -> anyhow::Result<()> {
+    pub fn send_quick_pick_result(
+        &mut self,
+        request_id: &str,
+        selected_index: serde_json::Value,
+    ) -> anyhow::Result<()> {
         self.stdin_tx.send(
             serde_json::json!({ "type": "quick_pick_result", "request_id": request_id, "selected_index": selected_index })
                 .to_string(),
@@ -463,9 +606,15 @@ impl ExtHostProcess {
 
     /// A `command:...` link clicked from the browser's settings UI — see
     /// vscode-shim.js's `executeShimCommand`.
-    pub fn execute_command(&mut self, command: &str, args: serde_json::Value) -> anyhow::Result<()> {
-        self.stdin_tx
-            .send(serde_json::json!({ "type": "execute_command", "command": command, "args": args }).to_string())?;
+    pub fn execute_command(
+        &mut self,
+        command: &str,
+        args: serde_json::Value,
+    ) -> anyhow::Result<()> {
+        self.stdin_tx.send(
+            serde_json::json!({ "type": "execute_command", "command": command, "args": args })
+                .to_string(),
+        )?;
         Ok(())
     }
 

@@ -28,6 +28,55 @@ function eolSequence(eol: 'LF' | 'CRLF'): monaco.editor.EndOfLineSequence {
  * time. */
 const pendingFileOpens = new Map<string, Promise<void>>();
 
+/** Keyed by the external file's own uri — same reasoning as
+ * pendingFileOpens above: concurrent definition/reference results commonly
+ * point at several locations in the *same* external file (overloads in a
+ * .d.ts, several `impl` blocks in one std module), and Monaco's definition
+ * navigation resolves them all in parallel, so without this a second
+ * concurrent open would call `monaco.editor.createModel` on a URI that the
+ * first call already claimed and throw. */
+const pendingExternalOpens = new Map<string, Promise<EditorTab | null>>();
+
+/** Fetches an external file's content via lsp-host and builds the tab for
+ * it — the read-only counterpart of openFile's own file-read+model-create
+ * steps. Deliberately not registered with the LSP session (no didOpen): the
+ * model's EOL is pinned to whatever the file actually uses like any other
+ * tab, but that alone doesn't guarantee the server would compute correct
+ * positions for a didOpen'd document outside its own rootUri, and some
+ * servers may not even index it — live hover/definition inside this tab is
+ * left as a follow-up rather than shipped unverified. */
+async function loadExternalFile(uri: string, groupId: string): Promise<EditorTab | null> {
+  let content: string;
+  try {
+    content = await useLspStore.getState().requestFileContent(uri);
+  } catch {
+    return null;
+  }
+  const name = decodeURIComponent(uri.split('/').pop() ?? uri);
+  const language = languageFromFilename(name);
+  await ensureLanguageTokenization(language);
+  const eol = detectEol(content);
+  const modelUri = monaco.Uri.parse(uri);
+  const model = monaco.editor.createModel(content, language, modelUri);
+  model.setEOL(eolSequence(eol));
+  return {
+    id: uuid(),
+    name,
+    pathSegments: [name],
+    modelUri: modelUri.toString(),
+    isDirty: false,
+    language,
+    lastKnownDiskModified: 0,
+    encoding: 'utf-8',
+    eol,
+    model,
+    groupId,
+    isPreview: false,
+    kind: 'external-text',
+    externalUri: uri,
+  };
+}
+
 export interface EditorTab extends OpenFile {
   /** Absent for `kind: 'image'` tabs — see OpenFile's `kind` doc comment. */
   model?: monaco.editor.ITextModel;
@@ -99,6 +148,13 @@ interface EditorTabsState {
    * file", go-to-definition, ...) omits this and opens permanently, same
    * as before this existed. */
   openFile: (node: FileTreeNode, options?: { preview?: boolean }) => Promise<void>;
+  /** Opens (or reuses/focuses an already-open) read-only tab for a
+   * definition/hover target outside the FSA workspace, fetching content via
+   * lsp-host's `read_file` request. Returns null if the fetch fails (e.g. the
+   * path no longer exists) — callers treat that the same as an unresolvable
+   * location. See lspProviders.ts's resolveLocationToMonaco/openCodeEditor,
+   * the two call sites Monaco actually routes navigation through. */
+  openExternalFile: (uri: string) => Promise<EditorTab | null>;
   closeFile: (id: string) => void;
   setActiveFile: (id: string) => void;
   /** Pins an already-open preview tab (double-clicking it in the tab strip
@@ -326,8 +382,11 @@ function resizeAdjacentPanes(node: EditorLayoutNode, splitId: string, index: num
 function disposeAndUnregisterTabs(tabs: EditorTab[]): void {
   const rootUri = useLspStore.getState().rootUri;
   for (const tab of tabs) {
-    if (tab.kind !== 'text') continue; // image tabs have no model, were never LSP-registered
-    if (isLspLanguage(tab.language) && rootUri) {
+    if (tab.kind === 'image') continue; // image tabs have no model, were never LSP-registered
+    // 'external-text' tabs have a model (disposed below) but, like image
+    // tabs, were never LSP-registered — see loadExternalFile's comment for
+    // why.
+    if (tab.kind === 'text' && isLspLanguage(tab.language) && rootUri) {
       useLspStore.getState().unregisterDocument(pathSegmentsToUri(rootUri, tab.pathSegments));
     }
     tab.model?.dispose();
@@ -578,6 +637,41 @@ export const useEditorTabsStore = create<EditorTabsState>((set, get) => ({
     }
   },
 
+  openExternalFile: async (uri: string) => {
+    function focusExternal(tab: EditorTab) {
+      set((state) => ({ ...(focusFileState(state, tab.id) ?? {}), ...pushHistory(state, tab.id) }));
+    }
+
+    const existing = get().openFiles.find((f) => f.kind === 'external-text' && f.externalUri === uri);
+    if (existing) {
+      focusExternal(existing);
+      return existing;
+    }
+
+    const pending = pendingExternalOpens.get(uri);
+    if (pending) return pending;
+
+    const groupId = get().focusedGroupId;
+    const loadPromise = loadExternalFile(uri, groupId).then((tab) => {
+      if (!tab) return null;
+      deactivateExtensionTabIfHosting(groupId);
+      set((state) => ({
+        openFiles: [...state.openFiles, tab],
+        groups: { ...state.groups, [groupId]: { ...state.groups[groupId], activeFileId: tab.id } },
+        focusedGroupId: groupId,
+        activeFileId: tab.id,
+        ...pushHistory(state, tab.id),
+      }));
+      return tab;
+    });
+    pendingExternalOpens.set(uri, loadPromise);
+    try {
+      return await loadPromise;
+    } finally {
+      pendingExternalOpens.delete(uri);
+    }
+  },
+
   closeFile: (id: string) => {
     const tab = get().openFiles.find((f) => f.id === id);
     if (tab) disposeAndUnregisterTabs([tab]);
@@ -613,7 +707,7 @@ export const useEditorTabsStore = create<EditorTabsState>((set, get) => ({
 
   saveFile: async (id: string) => {
     const tab = get().openFiles.find((f) => f.id === id);
-    if (!tab || tab.kind !== 'text' || !tab.model) return; // image tabs are never edited/dirty — nothing to save
+    if (!tab || tab.kind !== 'text' || !tab.model || !tab.fileHandle) return; // image/external tabs are never dirty — nothing to save
 
     const diskModified = await getFileLastModified(tab.fileHandle);
     if (diskModified !== tab.lastKnownDiskModified) {
@@ -708,7 +802,7 @@ export const useEditorTabsStore = create<EditorTabsState>((set, get) => ({
 
   setFileEncoding: async (id: string, encoding: TextEncodingId, mode: 'reopen' | 'resave') => {
     const tab = get().openFiles.find((f) => f.id === id);
-    if (!tab || tab.kind !== 'text') return;
+    if (!tab || tab.kind !== 'text' || !tab.fileHandle) return;
 
     if (mode === 'resave') {
       set((state) => ({

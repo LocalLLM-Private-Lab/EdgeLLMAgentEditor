@@ -24,6 +24,7 @@ interface RepositoryInfo {
   kind: VcsKind;
   branch: string | null;
   branches: string[];
+  remotes: string[];
 }
 
 interface HistoryEntry {
@@ -113,6 +114,10 @@ function parseGitBranches(output: string): string[] {
     .filter(Boolean);
 }
 
+function parseGitRemotes(output: string): string[] {
+  return [...new Set(output.split(/\r?\n/).map((line) => line.trim()).filter(Boolean))];
+}
+
 function parseGitHistory(output: string): HistoryEntry[] {
   return output
     .split(/\r?\n/)
@@ -155,6 +160,7 @@ export function SourceControlPanel() {
   const [history, setHistory] = useState<HistoryEntry[]>([]);
   const [showHistory, setShowHistory] = useState(false);
   const [branches, setBranches] = useState<string[]>([]);
+  const [selectedRemote, setSelectedRemote] = useState('');
 
   const run = useCallback(
     async (command: string, label: string): Promise<RunAndCaptureResult> => {
@@ -181,11 +187,15 @@ export function SourceControlPanel() {
         if (statusResult.exitCode !== 0) throw new Error(statusResult.output.trim() || 'git statusに失敗しました。');
         const branchResult = await run('git branch --show-current', 'Gitのブランチを取得');
         const branchListResult = await run("git branch --format='%(refname:short)'", 'Gitのブランチ一覧を取得');
+        const remoteResult = await run('git remote', 'Gitのremote一覧を取得');
+        const gitRemotes = remoteResult.exitCode === 0 ? parseGitRemotes(remoteResult.output) : [];
         setRepository({
           kind: 'git',
           branch: branchResult.output.trim() || null,
           branches: parseGitBranches(branchListResult.output),
+          remotes: gitRemotes,
         });
+        setSelectedRemote((current) => (gitRemotes.includes(current) ? current : gitRemotes[0] ?? ''));
         setBranches(parseGitBranches(branchListResult.output));
         setChanges(parseGitStatus(statusResult.output));
       } else {
@@ -194,19 +204,22 @@ export function SourceControlPanel() {
         if (!isSvnRepository) {
           setRepository(null);
           setBranches([]);
+          setSelectedRemote('');
           setChanges([]);
           setError('GitまたはSVNのリポジトリを検出できませんでした。');
           return;
         }
         const statusResult = await run('svn status', 'SVNの変更を取得');
         if (statusResult.exitCode !== 0) throw new Error(statusResult.output.trim() || 'svn statusに失敗しました。');
-        setRepository({ kind: 'svn', branch: null, branches: [] });
+        setRepository({ kind: 'svn', branch: null, branches: [], remotes: [] });
+        setSelectedRemote('');
         setBranches([]);
         setChanges(parseSvnStatus(statusResult.output));
       }
     } catch (err) {
       setRepository(null);
       setBranches([]);
+      setSelectedRemote('');
       setChanges([]);
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -221,6 +234,7 @@ export function SourceControlPanel() {
     else {
       setRepository(null);
       setBranches([]);
+      setSelectedRemote('');
       setChanges([]);
       setHistory([]);
     }
@@ -294,21 +308,38 @@ export function SourceControlPanel() {
     }
   }
 
-  async function handleSync(action: 'pull' | 'push' | 'update') {
+  async function handleSync(action: 'pull' | 'push' | 'fetch' | 'update') {
     if (!repository) return;
+    if (repository.kind === 'git' && !selectedRemote) {
+      setError('Gitのremoteが設定されていません。');
+      return;
+    }
     if (action === 'pull' && changes.length > 0) {
       if (!window.confirm('未コミットの変更があります。リモートから取得してよいですか？')) return;
     }
     setWorking(true);
     setError(null);
     try {
-      const command =
-        repository.kind === 'svn'
-          ? 'svn update'
-          : action === 'pull'
-            ? 'git pull --ff-only'
-            : 'git push';
-      const label = repository.kind === 'svn' ? 'SVNを更新' : action === 'pull' ? 'Gitをpull' : 'Gitをpush';
+      let command: string;
+      let label: string;
+      if (repository.kind === 'svn') {
+        command = 'svn update';
+        label = 'SVNを更新';
+      } else if (action === 'fetch') {
+        command = `git fetch ${shellQuote(selectedRemote)}`;
+        label = `Gitをfetch: ${selectedRemote}`;
+      } else {
+        if (!repository.branch) {
+          setError('現在のブランチがないため、pull/pushできません。');
+          return;
+        }
+        const remote = shellQuote(selectedRemote);
+        const branch = shellQuote(repository.branch);
+        command = action === 'pull'
+          ? `git pull --ff-only ${remote} ${branch}`
+          : `git push --set-upstream ${remote} ${branch}`;
+        label = action === 'pull' ? `Gitをpull: ${selectedRemote}/${repository.branch}` : `Gitをpush: ${selectedRemote}/${repository.branch}`;
+      }
       const result = await run(command, label);
       if (result.exitCode !== 0) setError(result.output.trim() || `${label}に失敗しました。`);
       else await refresh();
@@ -526,6 +557,22 @@ export function SourceControlPanel() {
             ) : (
               repository.branch && <span className="source-control-branch">⑂ {repository.branch}</span>
             )}
+            {repository.kind === 'git' && repository.remotes.length > 0 && (
+              <select
+                className="source-control-remote-select"
+                value={selectedRemote}
+                onChange={(event) => setSelectedRemote(event.target.value)}
+                disabled={working}
+                aria-label="Git remote"
+                title="pull / push / fetchに使用するGit remote"
+              >
+                {repository.remotes.map((remote) => (
+                  <option key={remote} value={remote}>
+                    ⇄ {remote}
+                  </option>
+                ))}
+              </select>
+            )}
           </div>
           {!workspaceRealPath && (
             <div className="source-control-hint">
@@ -539,11 +586,14 @@ export function SourceControlPanel() {
             </button>
             {repository.kind === 'git' && (
               <>
-                <button onClick={() => void handleSync('pull')} disabled={working}>
+                <button onClick={() => void handleSync('pull')} disabled={working || !selectedRemote}>
                   pull
                 </button>
-                <button onClick={() => void handleSync('push')} disabled={working}>
+                <button onClick={() => void handleSync('push')} disabled={working || !selectedRemote}>
                   push
+                </button>
+                <button onClick={() => void handleSync('fetch')} disabled={working || !selectedRemote}>
+                  fetch
                 </button>
                 <button onClick={() => void runGitPathAction('stage')} disabled={working || changes.length === 0}>
                   {selectedCount > 0 ? '選択をステージ' : 'すべてステージ'}

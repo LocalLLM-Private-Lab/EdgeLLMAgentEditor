@@ -1,6 +1,6 @@
 import './ActivityBar.css';
 
-export type SidebarView = 'explorer' | 'extensions';
+export type SidebarView = 'explorer' | 'source-control' | 'extensions';
 
 interface ActivityBarProps {
   /** null = sidebar closed. Otherwise which view is showing — drives which
@@ -26,6 +26,15 @@ export function ActivityBar({ activeView, onSelectView, onOpenSettings }: Activi
         aria-pressed={activeView === 'explorer'}
       >
         📁
+      </button>
+      <button
+        className={`activity-bar-button ${activeView === 'source-control' ? 'active' : ''}`}
+        onClick={() => onSelectView('source-control')}
+        title="ソース管理"
+        aria-label="ソース管理"
+        aria-pressed={activeView === 'source-control'}
+      >
+        ⎇
       </button>
       <button
         className={`activity-bar-button ${activeView === 'extensions' ? 'active' : ''}`}

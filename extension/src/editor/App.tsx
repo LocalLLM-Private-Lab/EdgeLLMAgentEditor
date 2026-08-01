@@ -29,6 +29,8 @@ import { ExtensionNotifications } from './components/ExtensionNotifications';
 import { ExtensionQuickPick } from './components/ExtensionQuickPick';
 import { ActivityBar, type SidebarView } from './components/ActivityBar';
 import { ExtensionsPanel } from './components/ExtensionsPanel';
+import { SourceControlPanel } from './components/SourceControlPanel';
+import { TerminalPanel } from './components/TerminalPanel';
 import { MenuBar, type Menu } from './components/MenuBar';
 import { SettingsModal, type SettingsCategory } from './components/SettingsModal';
 import { ResizeHandle } from './components/ResizeHandle';
@@ -466,6 +468,8 @@ export default function App() {
             <aside className="app-sidebar" style={{ width: sidebar.size }}>
               {activeSidebarView === 'extensions' ? (
                 <ExtensionsPanel />
+              ) : activeSidebarView === 'source-control' ? (
+                <SourceControlPanel />
               ) : status === 'connected' ? (
                 <FileTree />
               ) : (
@@ -577,6 +581,7 @@ export default function App() {
       )}
       {textEditMenu && <TextEditContextMenu state={textEditMenu} onClose={() => setTextEditMenu(null)} />}
       <OpenAnywayModal />
+      <TerminalPanel backgroundCaptureOnly />
     </div>
   );
 }

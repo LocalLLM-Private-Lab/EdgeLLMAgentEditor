@@ -24,6 +24,8 @@ interface TreeContextMenuProps {
   /** contextNode is where to paste — null means the root/empty area. */
   onPaste: (contextNode: FileTreeNode | null) => void;
   canPaste: boolean;
+  onCompare?: () => void;
+  canCompare?: boolean;
 }
 
 export function TreeContextMenu({
@@ -37,6 +39,8 @@ export function TreeContextMenu({
   onCopyRelativePath,
   onPaste,
   canPaste,
+  onCompare,
+  canCompare = false,
 }: TreeContextMenuProps) {
   useDismissOnOutsideClick(onClose, true, ['click', 'contextmenu']);
 
@@ -51,6 +55,9 @@ export function TreeContextMenu({
   }
   if (canPaste) {
     items.push({ label: '貼り付け', onClick: () => onPaste(node) });
+  }
+  if (canCompare && onCompare) {
+    items.push({ label: '選択した2ファイルを比較', onClick: onCompare });
   }
   if (node) {
     items.push(

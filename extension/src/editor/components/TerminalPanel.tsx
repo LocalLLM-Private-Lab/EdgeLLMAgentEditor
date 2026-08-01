@@ -27,7 +27,8 @@ function safeTerminalDimension(value: number, fallback: number): number {
   return Number.isFinite(value) && value > 0 ? Math.floor(value) : fallback;
 }
 
-export function TerminalPanel() {
+export function TerminalPanel({ backgroundCaptureOnly = false }: { backgroundCaptureOnly?: boolean } = {}) {
+  const panelClassName = `terminal-panel${backgroundCaptureOnly ? ' terminal-panel-background' : ''}`;
   const settings = useTerminalStore((s) => s.settings);
   const connectionState = useTerminalStore((s) => s.connectionState);
   const saveSettings = useTerminalStore((s) => s.saveSettings);
@@ -204,7 +205,7 @@ export function TerminalPanel() {
   // Consumes a command queued by the header's Run button (App.tsx). Runs
   // it in the active session, opening one first if none exists yet.
   useEffect(() => {
-    if (!pendingRunRequest || connectionState !== 'connected') return;
+    if (backgroundCaptureOnly || !pendingRunRequest || connectionState !== 'connected') return;
     const cmd = consumePendingRunRequest();
     if (!cmd) return;
     const sessionId = activeSessionId ?? openSession();
@@ -214,7 +215,7 @@ export function TerminalPanel() {
       data: bytesToBase64(new TextEncoder().encode(cmd + '\r')),
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pendingRunRequest, connectionState]);
+  }, [backgroundCaptureOnly, pendingRunRequest, connectionState]);
 
   // Same one-shot pattern as pendingRunRequest, but for a Copilot-driven
   // "run and capture the output" request (copilot/runAndCapture.ts) —
@@ -222,7 +223,11 @@ export function TerminalPanel() {
   // active, so the caller can correlate this run's stdout/exit code via a
   // session id nothing else is typing into.
   useEffect(() => {
-    if (!pendingCaptureRun || connectionState !== 'connected') return;
+    if (
+      !pendingCaptureRun ||
+      connectionState !== 'connected' ||
+      Boolean(pendingCaptureRun.background) !== backgroundCaptureOnly
+    ) return;
     const req = consumePendingCaptureRun();
     if (!req) return;
     const sessionId = openSession(req.label);
@@ -233,7 +238,7 @@ export function TerminalPanel() {
       data: bytesToBase64(new TextEncoder().encode(req.command + '\r')),
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [pendingCaptureRun, connectionState]);
+  }, [backgroundCaptureOnly, pendingCaptureRun, connectionState]);
 
   useEffect(() => {
     if (connectionState === 'connected') setLaunchMessage(null);
@@ -291,7 +296,7 @@ export function TerminalPanel() {
 
   if (!settings) {
     return (
-      <div className="terminal-panel">
+      <div className={panelClassName}>
         <div className="terminal-settings-form">
           <p>通常は拡張機能の起動時に自動でterminal-hostが立ち上がって接続します。まだの場合はこちらから起動できます。</p>
           <button onClick={() => void handleLaunchHost()}>ターミナルホストを起動</button>
@@ -321,7 +326,7 @@ export function TerminalPanel() {
   }
 
   return (
-    <div className="terminal-panel">
+    <div className={panelClassName}>
       <div className="terminal-panel-toolbar">
         <span className={`terminal-status terminal-status-${connectionState}`}>
           {connectionState}

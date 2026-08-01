@@ -22,6 +22,7 @@ import { resolveWorkspaceFiles } from '../copilot/resolveWorkspaceFile';
 import { readFileText } from '../fs/fsaWorkspace';
 import { FileContextPicker } from './FileContextPicker';
 import { DiffViewModal } from './DiffViewModal';
+import { MultiDiffViewModal, type MultiDiffItem } from './MultiDiffViewModal';
 import { PlanPanel } from './PlanPanel';
 import { ToolRunConfirmation } from './ToolRunConfirmation';
 import './CopilotPanel.css';
@@ -99,6 +100,7 @@ function QuickRequestPanel({ analysisOnly, visible }: QuickRequestPanelProps) {
   const [blocks, setBlocks] = useState<ExtractedCodeBlock[]>([]);
   const [applyTargetByBlock, setApplyTargetByBlock] = useState<Record<string, string>>({});
   const [diffPreview, setDiffPreview] = useState<ApplyPreview | null>(null);
+  const [multiDiffPreview, setMultiDiffPreview] = useState<MultiDiffItem[] | null>(null);
   const [justCopiedPrompt, setJustCopiedPrompt] = useState(false);
   const [analysisText, setAnalysisText] = useState<string | null>(null);
 
@@ -322,6 +324,30 @@ function QuickRequestPanel({ analysisOnly, visible }: QuickRequestPanelProps) {
     setDiffPreview(preview);
   }
 
+  async function handlePreviewAll() {
+    if (!rootHandle) return;
+    const previews: MultiDiffItem[] = [];
+    for (const block of blocks) {
+      const targetPath = applyTargetByBlock[block.id];
+      if (!targetPath) continue;
+      const preview = await resolveApplyPreview(targetPath, block);
+      if (!preview) continue;
+      previews.push({
+        id: block.id,
+        fileName: preview.fileName,
+        original: preview.original,
+        modified: preview.modified,
+        language: preview.language,
+        onApply: preview.apply,
+      });
+    }
+    if (previews.length === 0) {
+      setStatus('差分を表示するには、各コードブロックの適用先を指定してください。');
+      return;
+    }
+    setMultiDiffPreview(previews);
+  }
+
   async function handleApplyAll() {
     if (!rootHandle) return;
     let applied = 0;
@@ -449,6 +475,12 @@ function QuickRequestPanel({ analysisOnly, visible }: QuickRequestPanelProps) {
           <>
           {blocks.length > 0 && (
             <div className="copilot-actions">
+              <button
+                onClick={() => void handlePreviewAll()}
+                disabled={!blocks.some((block) => Boolean(applyTargetByBlock[block.id]))}
+              >
+                まとめて差分を確認
+              </button>
               <button className="primary" onClick={() => void handleApplyAll()}>
                 すべて適用
               </button>
@@ -492,6 +524,14 @@ function QuickRequestPanel({ analysisOnly, visible }: QuickRequestPanelProps) {
             void diffPreview.apply().then(() => setDiffPreview(null));
           }}
           onCancel={() => setDiffPreview(null)}
+        />
+      )}
+      {multiDiffPreview && (
+        <MultiDiffViewModal
+          title="複数ファイルの差分"
+          files={multiDiffPreview}
+          onClose={() => setMultiDiffPreview(null)}
+          onAllApplied={() => setStatus(`${multiDiffPreview.length}件の差分を適用しました。`)}
         />
       )}
     </div>

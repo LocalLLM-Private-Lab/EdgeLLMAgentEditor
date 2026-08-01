@@ -6,6 +6,19 @@
   flex-direction: column;
 }
 
+/* A permanently mounted, non-visual host consumes background capture runs
+ * even when the user has hidden the terminal dock. */
+.terminal-panel-background {
+  position: fixed;
+  top: -10000px;
+  left: -10000px;
+  width: 800px;
+  height: 600px;
+  opacity: 0;
+  pointer-events: none;
+  overflow: hidden;
+}
+
 .terminal-panel-toolbar {
   display: flex;
   align-items: center;

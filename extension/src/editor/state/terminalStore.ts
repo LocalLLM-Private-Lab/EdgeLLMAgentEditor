@@ -22,6 +22,7 @@ const SETTINGS_STORAGE_KEY = 'terminalHostSettings';
 export interface PendingCaptureRun {
   command: string;
   label: string;
+  background?: boolean;
   onSessionOpened: (sessionId: string) => void;
 }
 
@@ -58,7 +59,12 @@ interface TerminalState {
   subscribe: (listener: (msg: ServerMessage) => void) => () => void;
   queueRunRequest: (command: string) => void;
   consumePendingRunRequest: () => string | null;
-  queueCaptureRun: (command: string, label: string, onSessionOpened: (sessionId: string) => void) => void;
+  queueCaptureRun: (
+    command: string,
+    label: string,
+    onSessionOpened: (sessionId: string) => void,
+    background?: boolean,
+  ) => void;
   consumePendingCaptureRun: () => PendingCaptureRun | null;
 }
 
@@ -130,7 +136,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     return cmd;
   },
 
-  queueCaptureRun: (command, label, onSessionOpened) => {
+  queueCaptureRun: (command, label, onSessionOpened, background = false) => {
     if (get().pendingCaptureRun) {
       // Two capture-runs queued before the first one's been picked up by
       // TerminalPanel (should only happen within the same render tick,
@@ -140,7 +146,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       // eslint-disable-next-line no-console
       console.warn('terminalStore: pendingCaptureRun overwritten before it was consumed');
     }
-    set({ pendingCaptureRun: { command, label, onSessionOpened } });
+    set({ pendingCaptureRun: { command, label, onSessionOpened, background } });
   },
 
   consumePendingCaptureRun: () => {

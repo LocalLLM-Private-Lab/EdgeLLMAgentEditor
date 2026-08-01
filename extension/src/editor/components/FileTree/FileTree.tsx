@@ -3,6 +3,10 @@ import { create } from 'zustand';
 import type { FileTreeNode } from '../../../shared/types';
 import { useWorkspaceStore, directoryTargetFor, type DirectoryTarget } from '../../state/workspaceStore';
 import { useEditorTabsStore } from '../../state/editorTabsStore';
+import { useDiffViewStore } from '../../state/diffViewStore';
+import { readFileBytes } from '../../fs/fsaWorkspace';
+import { decodeBytes, detectEncodingFromBytes } from '../../fs/textEncodings';
+import { languageFromFilename } from '../../monaco/languageRegistrations';
 import { TreeContextMenu, type ContextMenuState } from './TreeContextMenu';
 import { InlineNameInput } from './InlineNameInput';
 import { FileIcon } from '../FileIcon';
@@ -21,6 +25,7 @@ interface FileTreeUiState {
   creatingIn: CreatingState | null;
   renamingNodeId: string | null;
   selectedNodeIds: Set<string>;
+  selectionAnchorId: string | null;
   clipboardNode: FileTreeNode | null;
   setCreatingIn: (v: CreatingState | null) => void;
   setRenamingNodeId: (id: string | null) => void;
@@ -30,23 +35,27 @@ interface FileTreeUiState {
   /** Ctrl/Cmd+click — adds or removes this node from the selection without
    * touching the rest, VS Code's Explorer multi-select convention. */
   toggleSelected: (id: string) => void;
+  /** Shift+click — selects the visible tree range from the anchor. */
+  selectRange: (ids: string[], anchorId: string) => void;
 }
 
 const useFileTreeUi = create<FileTreeUiState>((set, get) => ({
   creatingIn: null,
   renamingNodeId: null,
   selectedNodeIds: new Set(),
+  selectionAnchorId: null,
   clipboardNode: null,
   setCreatingIn: (creatingIn) => set({ creatingIn }),
   setRenamingNodeId: (renamingNodeId) => set({ renamingNodeId }),
   setClipboardNode: (clipboardNode) => set({ clipboardNode }),
-  selectOnly: (id) => set({ selectedNodeIds: new Set([id]) }),
+  selectOnly: (id) => set({ selectedNodeIds: new Set([id]), selectionAnchorId: id }),
   toggleSelected: (id) => {
     const next = new Set(get().selectedNodeIds);
     if (next.has(id)) next.delete(id);
     else next.add(id);
-    set({ selectedNodeIds: next });
+    set({ selectedNodeIds: next, selectionAnchorId: get().selectionAnchorId ?? id });
   },
+  selectRange: (ids, anchorId) => set({ selectedNodeIds: new Set(ids), selectionAnchorId: anchorId }),
 }));
 
 function creatingParentId(target: DirectoryTarget | null): string {
@@ -98,6 +107,64 @@ async function handleRenameConfirm(node: FileTreeNode, newName: string) {
 
 function handleCopyRelativePath(node: FileTreeNode) {
   void navigator.clipboard.writeText(node.pathSegments.join('/'));
+}
+
+function visibleTreeNodes(nodes: FileTreeNode[]): FileTreeNode[] {
+  const result: FileTreeNode[] = [];
+  for (const node of nodes) {
+    result.push(node);
+    if (node.kind === 'directory' && node.childrenLoaded === true && node.children) {
+      result.push(...visibleTreeNodes(node.children));
+    }
+  }
+  return result;
+}
+
+async function openSelectedFilesDiff(nodes: FileTreeNode[]) {
+  if (nodes.length !== 2 || nodes.some((node) => node.kind !== 'file' || !node.handle)) return;
+  try {
+    const contents = await Promise.all(
+      nodes.map(async (node) => {
+        const openTab = useEditorTabsStore
+          .getState()
+          .openFiles.find((file) => file.pathSegments.join('/') === node.pathSegments.join('/'));
+        if (openTab?.model) return openTab.model.getValue();
+        const bytes = await readFileBytes(node.handle as FileSystemFileHandle);
+        return decodeBytes(bytes, detectEncodingFromBytes(bytes));
+      }),
+    );
+    const [first, second] = nodes;
+    await useEditorTabsStore.getState().openFile(first, { preview: false });
+    await useEditorTabsStore.getState().openFile(second, { preview: false });
+    const editorTabs = useEditorTabsStore.getState().openFiles;
+    const originalFileId = editorTabs
+      .find((file) => file.pathSegments.join('/') === first.pathSegments.join('/'))?.id;
+    const modifiedFileId = editorTabs.find((file) => file.pathSegments.join('/') === second.pathSegments.join('/'))?.id;
+    useDiffViewStore.getState().openDiff(useEditorTabsStore.getState().focusedGroupId, {
+      title: `${first.name} ↔ ${second.name}`,
+      originalName: first.pathSegments.join('/'),
+      modifiedName: second.pathSegments.join('/'),
+      original: contents[0],
+      modified: contents[1],
+      language: languageFromFilename(second.name),
+      originalFileId,
+      modifiedFileId,
+      bothEditable: true,
+    });
+  } catch (err) {
+    window.alert(`ファイルを比較できませんでした: ${(err as Error).message}`);
+  }
+}
+
+function contextMenuNodeForCompare(tree: FileTreeNode[], contextNode: FileTreeNode | null): FileTreeNode[] {
+  if (!contextNode) return [];
+  const selectedIds = useFileTreeUi.getState().selectedNodeIds;
+  if (!selectedIds.has(contextNode.id)) {
+    return contextNode.kind === 'file' ? [contextNode] : [];
+  }
+  return [...selectedIds]
+    .map((id) => findNodeByPath(tree, id.split('/')))
+    .filter((node): node is FileTreeNode => node !== null && node.kind === 'file');
 }
 
 async function handleDeleteNodes(nodes: FileTreeNode[]) {
@@ -184,6 +251,25 @@ const TreeNode = memo(function TreeNode({
   const creatingKind = useFileTreeUi((s) => s.creatingIn?.kind);
 
   const handleClick = (e: React.MouseEvent) => {
+    if (e.shiftKey) {
+      const state = useFileTreeUi.getState();
+      const visibleNodes = visibleTreeNodes(useWorkspaceStore.getState().tree);
+      const anchorIndex = state.selectionAnchorId
+        ? visibleNodes.findIndex((candidate) => candidate.id === state.selectionAnchorId)
+        : -1;
+      const targetIndex = visibleNodes.findIndex((candidate) => candidate.id === node.id);
+      if (anchorIndex >= 0 && targetIndex >= 0) {
+        const start = Math.min(anchorIndex, targetIndex);
+        const end = Math.max(anchorIndex, targetIndex);
+        state.selectRange(
+          visibleNodes.slice(start, end + 1).map((candidate) => candidate.id),
+          state.selectionAnchorId!,
+        );
+      } else {
+        state.selectOnly(node.id);
+      }
+      return;
+    }
     // Ctrl/Cmd+click only toggles this row in/out of the selection — VS
     // Code's Explorer doesn't also open the file or expand the folder on
     // that click, since it's a pure selection gesture.
@@ -268,6 +354,8 @@ export function FileTree() {
   const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const hasClipboard = useFileTreeUi((s) => s.clipboardNode !== null);
 
+  const selectedCompareNodes = contextMenuNodeForCompare(tree, contextMenu?.node ?? null);
+
   const handleContextMenu = useCallback((e: React.MouseEvent, node: FileTreeNode | null) => {
     e.preventDefault();
     e.stopPropagation();
@@ -309,6 +397,8 @@ export function FileTree() {
           onCopyRelativePath={(node) => handleCopyRelativePath(node)}
           onPaste={(node) => void handlePasteInto(node)}
           canPaste={hasClipboard}
+          onCompare={() => void openSelectedFilesDiff(selectedCompareNodes)}
+          canCompare={selectedCompareNodes.length === 2}
         />
       )}
     </div>

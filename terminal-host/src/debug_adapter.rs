@@ -497,10 +497,12 @@ pub fn spawn(
                 stdin,
                 stdout,
                 stderr,
-                request_rx,
-                stop_rx,
-                task_session_id,
-                out_tx,
+                AdapterRuntime {
+                    request_rx,
+                    stop_rx,
+                    session_id: task_session_id,
+                    out_tx,
+                },
             )
             .await;
         }
@@ -624,16 +626,26 @@ async fn run_tcp_adapter(
     });
 }
 
+struct AdapterRuntime {
+    request_rx: mpsc::UnboundedReceiver<Value>,
+    stop_rx: mpsc::UnboundedReceiver<()>,
+    session_id: String,
+    out_tx: mpsc::UnboundedSender<ServerMessage>,
+}
+
 async fn run_adapter<R: AsyncRead + Unpin + Send + 'static>(
     mut child: Child,
     mut stdin: ChildStdin,
     stdout: R,
     stderr: impl AsyncRead + Unpin + Send + 'static,
-    mut request_rx: mpsc::UnboundedReceiver<Value>,
-    mut stop_rx: mpsc::UnboundedReceiver<()>,
-    session_id: String,
-    out_tx: mpsc::UnboundedSender<ServerMessage>,
+    runtime: AdapterRuntime,
 ) {
+    let AdapterRuntime {
+        mut request_rx,
+        mut stop_rx,
+        session_id,
+        out_tx,
+    } = runtime;
     let reader_session_id = session_id.clone();
     let reader_out_tx = out_tx.clone();
     let reader_task = tokio::spawn(async move {
@@ -686,9 +698,7 @@ async fn run_adapter<R: AsyncRead + Unpin + Send + 'static>(
 
     let writer_task = tokio::spawn(async move {
         while let Some(message) = request_rx.recv().await {
-            if let Err(err) = write_dap_message(&mut stdin, &message).await {
-                return Err(err);
-            }
+            write_dap_message(&mut stdin, &message).await?;
         }
         Ok::<(), anyhow::Error>(())
     });

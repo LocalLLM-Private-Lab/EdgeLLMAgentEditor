@@ -1,0 +1,15 @@
+{
+  "version": 1,
+  "configurations": [
+    {
+      "name": "terminal-host (Rust)",
+      "type": "lldb",
+      "request": "launch",
+      "program": "${workspaceFolder}/terminal-host/target/debug/terminal-host.exe",
+      "cwd": "${workspaceFolder}",
+      "args": [],
+      "stopOnEntry": false,
+      "autoInstallDebugAdapter": true
+    }
+  ]
+}

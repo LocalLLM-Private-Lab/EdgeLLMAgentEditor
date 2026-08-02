@@ -13,10 +13,12 @@ lsp-host/native-messaging-host-manifest.json
 
 # Written into an opened workspace folder once its real OS path is
 # registered (WorkspacePathBanner.tsx / AppCommandBar.tsx's "ワークスペースの
-# 実パスを登録..." -> workspaceStore.ts's setWorkspaceRealPath) — this repo's
-# own working tree can end up with one too if it's ever opened as a
-# workspace in the app itself.
-.m365ce
+# 実パスを登録..." -> workspaceStore.ts's setWorkspaceRealPath) — keep this
+# machine-specific path marker private, while allowing shareable project
+# tasks and launch configurations to be committed.
+.m365ce/*
+!.m365ce/tasks.json
+!.m365ce/launch.json
 
 # OS
 .DS_Store

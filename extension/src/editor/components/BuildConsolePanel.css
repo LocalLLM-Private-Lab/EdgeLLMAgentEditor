@@ -9,6 +9,244 @@
   overflow-y: auto;
 }
 
+.build-console-toolbar,
+.build-console-settings,
+.build-console-breakpoints {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+  margin-bottom: 8px;
+}
+
+.build-console-toolbar button {
+  padding: 4px 8px;
+  border: 1px solid #555;
+  border-radius: 3px;
+  background: #252526;
+  color: inherit;
+  cursor: pointer;
+}
+
+.build-console-toolbar button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.debug-status {
+  padding: 3px 6px;
+  border-radius: 3px;
+  background: #333;
+}
+
+.debug-status-running { color: #89d185; }
+.debug-status-paused { color: #d7ba7d; }
+.debug-status-error { color: #f48771; }
+
+.build-console-settings {
+  align-items: stretch;
+  flex-direction: column;
+}
+
+.build-console-settings label {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.build-console-settings label.build-console-checkbox {
+  flex-direction: row;
+  align-items: center;
+}
+
+.build-console-checkbox input {
+  flex: none;
+  min-width: auto;
+}
+
+.build-console-settings input {
+  flex: 1;
+  min-width: 220px;
+  padding: 4px 6px;
+  border: 1px solid #555;
+  background: #1e1e1e;
+  color: inherit;
+  font: inherit;
+}
+
+.build-console-settings textarea {
+  flex: 1;
+  min-width: 220px;
+  padding: 4px 6px;
+  border: 1px solid #555;
+  background: #1e1e1e;
+  color: inherit;
+  font: inherit;
+  resize: vertical;
+}
+
+.build-console-wide-field {
+  align-items: flex-start !important;
+}
+
+.build-console-wide-field textarea {
+  min-height: 54px;
+}
+
+.build-console-settings small {
+  color: #888;
+}
+
+.build-console-project-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 7px;
+  margin: 10px 0;
+  padding: 8px;
+  border: 1px solid #333;
+  background: #151515;
+}
+
+.build-console-project-settings-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.build-console-project-settings-header span {
+  color: #888;
+}
+
+.build-console-project-settings-header button {
+  margin-left: auto;
+  padding: 4px 8px;
+  border: 1px solid #555;
+  border-radius: 3px;
+  background: #252526;
+  color: inherit;
+  cursor: pointer;
+}
+
+.build-console-project-settings-header button:disabled {
+  cursor: default;
+  opacity: 0.45;
+}
+
+.build-console-project-settings label {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+}
+
+.build-console-project-settings textarea {
+  flex: 1;
+  min-width: 220px;
+  padding: 4px 6px;
+  border: 1px solid #555;
+  background: #1e1e1e;
+  color: inherit;
+  font: inherit;
+  resize: vertical;
+}
+
+.build-console-project-settings small {
+  color: #888;
+}
+
+.build-console-breakpoints {
+  color: #d7ba7d;
+  font-size: 11px;
+}
+
+.build-console-command {
+  padding: 6px;
+  color: #9cdcfe;
+  border-top: 1px solid #333;
+  overflow-wrap: anywhere;
+}
+
+.build-console-output {
+  margin: 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.build-console-result.success { color: #89d185; }
+.build-console-result.failure { color: #f48771; }
+
+.debug-error,
+.debug-message {
+  padding: 5px 7px;
+  margin-bottom: 7px;
+  border-left: 3px solid #f48771;
+  background: #2a1e1e;
+  color: #f4b8ae;
+}
+
+.debug-message {
+  border-left-color: #d7ba7d;
+  background: #2a261e;
+  color: #d7ba7d;
+}
+
+.debug-layout {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(240px, 1.4fr);
+  gap: 10px;
+  margin: 8px 0;
+}
+
+.debug-section {
+  min-height: 90px;
+  border: 1px solid #333;
+  padding: 6px;
+}
+
+.debug-section h4 {
+  margin: 0 0 5px;
+  color: #9cdcfe;
+  font-size: 12px;
+}
+
+.debug-section h4:not(:first-child) {
+  margin-top: 10px;
+}
+
+.debug-stack-frame,
+.debug-scope,
+.debug-variable {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 3px 4px;
+  border-bottom: 1px solid #242424;
+  overflow-wrap: anywhere;
+}
+
+button.debug-stack-frame {
+  width: 100%;
+  border: 0;
+  border-bottom: 1px solid #242424;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+button.debug-stack-frame:hover {
+  background: #2a2d2e;
+}
+
+.debug-stack-frame small {
+  color: #888;
+}
+
+.debug-variable span:last-child {
+  color: #ce9178;
+  text-align: right;
+}
+
 .build-console-empty {
   opacity: 0.5;
 }

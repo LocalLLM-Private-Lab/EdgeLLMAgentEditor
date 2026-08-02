@@ -1,0 +1,30 @@
+.editor-diff-view {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  width: 100%;
+}
+
+.editor-diff-view-header {
+  align-items: center;
+  background: var(--editor-group-header-background, #252526);
+  border-bottom: 1px solid var(--border-color, #3e3e42);
+  color: var(--text-secondary, #cccccc);
+  display: flex;
+  flex: 0 0 32px;
+  gap: 10px;
+  padding: 0 12px;
+  font-size: 12px;
+}
+
+.editor-diff-view-separator {
+  color: var(--text-muted, #858585);
+}
+
+.editor-diff-view-body {
+  flex: 1 1 auto;
+  min-height: 0;
+  min-width: 0;
+  width: 100%;
+}

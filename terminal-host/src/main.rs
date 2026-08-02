@@ -1,5 +1,6 @@
 mod auth;
 mod config;
+mod debug_adapter;
 mod ext_host;
 mod native_messaging;
 mod protocol;

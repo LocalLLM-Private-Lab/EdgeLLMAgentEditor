@@ -64,3 +64,7 @@ export function buildRunCommand(template: string, realFilePath: string): string 
   const quoted = /\s/.test(realFilePath) ? `"${realFilePath}"` : realFilePath;
   return template.replaceAll('{file}', quoted);
 }
+
+export function buildDebugCommand(template: string, realFilePath: string, breakpoints: number[]): string {
+  return buildRunCommand(template, realFilePath).replaceAll('{breakpoints}', breakpoints.join(','));
+}

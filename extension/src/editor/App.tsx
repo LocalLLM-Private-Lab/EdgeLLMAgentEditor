@@ -6,6 +6,7 @@ import { useTerminalStore } from './state/terminalStore';
 import { useKeybindingStore } from './state/keybindingStore';
 import { useLspStore } from './lsp/lspStore';
 import { useRunCommandStore, extensionOf, buildRunCommand } from './state/runCommandStore';
+import { useBuildStore } from './state/buildStore';
 import { useNamedCommandStore } from './state/namedCommandStore';
 import {
   initExtensionHostBridge,
@@ -29,6 +30,8 @@ import { ExtensionNotifications } from './components/ExtensionNotifications';
 import { ExtensionQuickPick } from './components/ExtensionQuickPick';
 import { ActivityBar, type SidebarView } from './components/ActivityBar';
 import { ExtensionsPanel } from './components/ExtensionsPanel';
+import { SourceControlPanel } from './components/SourceControlPanel';
+import { TerminalPanel } from './components/TerminalPanel';
 import { MenuBar, type Menu } from './components/MenuBar';
 import { SettingsModal, type SettingsCategory } from './components/SettingsModal';
 import { ResizeHandle } from './components/ResizeHandle';
@@ -70,6 +73,7 @@ export default function App() {
 
   const runCommands = useRunCommandStore((s) => s.commands);
   const loadRunCommands = useRunCommandStore((s) => s.loadCommands);
+  const loadBuildSettings = useBuildStore((s) => s.loadSettings);
   const loadNamedCommands = useNamedCommandStore((s) => s.loadCommands);
   const queueRunRequest = useTerminalStore((s) => s.queueRunRequest);
   const [settingsCategory, setSettingsCategory] = useState<SettingsCategory | null>(null);
@@ -167,6 +171,7 @@ export default function App() {
     void restoreFromLastSession();
     void ensureTerminalConnected();
     void loadRunCommands();
+    void loadBuildSettings();
     void loadNamedCommands();
     initExtensionHostBridge();
     void activateAutoStartExtensions();
@@ -180,6 +185,7 @@ export default function App() {
     restoreFromLastSession,
     ensureTerminalConnected,
     loadRunCommands,
+    loadBuildSettings,
     loadNamedCommands,
     loadPromptTemplates,
     loadPlanPromptTemplates,
@@ -427,14 +433,36 @@ export default function App() {
       ],
     },
     {
-      // ガワのみ — 実際のビルド処理は未実装。表示メニューのビルドコンソール
-      // パネル(BuildConsolePanel.tsx)と合わせて、実装時はここを差し替える。
       label: 'ビルド',
-      items: [{ label: 'ビルドを実行(準備中)', onClick: () => {}, disabled: true }],
+      items: [
+        {
+          label: 'ビルドを実行',
+          onClick: () => {
+            setDockVisible('buildConsole', true);
+            useBuildStore.getState().requestAction('build');
+          },
+        },
+      ],
     },
     {
       label: '実行',
-      items: [{ label: '実行(準備中)', onClick: () => {}, disabled: true }],
+      items: [
+        {
+          label: '通常実行',
+          onClick: () => {
+            setDockVisible('buildConsole', true);
+            useBuildStore.getState().requestAction('run');
+          },
+          disabled: !runCommandTemplate,
+        },
+        {
+          label: 'デバッガ実行',
+          onClick: () => {
+            setDockVisible('buildConsole', true);
+            useBuildStore.getState().requestAction('debug');
+          },
+        },
+      ],
     },
     {
       label: 'ヘルプ',
@@ -466,6 +494,8 @@ export default function App() {
             <aside className="app-sidebar" style={{ width: sidebar.size }}>
               {activeSidebarView === 'extensions' ? (
                 <ExtensionsPanel />
+              ) : activeSidebarView === 'source-control' ? (
+                <SourceControlPanel />
               ) : status === 'connected' ? (
                 <FileTree />
               ) : (
@@ -577,6 +607,7 @@ export default function App() {
       )}
       {textEditMenu && <TextEditContextMenu state={textEditMenu} onClose={() => setTextEditMenu(null)} />}
       <OpenAnywayModal />
+      <TerminalPanel backgroundCaptureOnly />
     </div>
   );
 }

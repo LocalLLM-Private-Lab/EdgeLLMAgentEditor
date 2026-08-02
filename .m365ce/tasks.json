@@ -1,0 +1,47 @@
+{
+  "version": 1,
+  "tasks": [
+    {
+      "id": "build",
+      "label": "拡張機能をビルド",
+      "command": "npm --prefix extension run build",
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "id": "run",
+      "label": "プロジェクト検証を実行",
+      "command": "cargo test --manifest-path terminal-host/Cargo.toml",
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "id": "lint",
+      "label": "拡張機能をLint",
+      "command": "npm --prefix extension run lint",
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "id": "build-terminal-host",
+      "label": "terminal-hostをビルド",
+      "command": "cargo build --manifest-path terminal-host/Cargo.toml",
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "id": "test-terminal-host",
+      "label": "terminal-hostをテスト",
+      "command": "cargo test --manifest-path terminal-host/Cargo.toml",
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "id": "build-lsp-host",
+      "label": "lsp-hostをビルド",
+      "command": "cargo build --manifest-path lsp-host/Cargo.toml",
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "id": "test-lsp-host",
+      "label": "lsp-hostをテスト",
+      "command": "cargo test --manifest-path lsp-host/Cargo.toml",
+      "cwd": "${workspaceFolder}"
+    }
+  ]
+}

@@ -20,6 +20,7 @@ import {
 } from '../copilot/applyToFileFlow';
 import { FileContextPicker } from './FileContextPicker';
 import { DiffViewModal } from './DiffViewModal';
+import { MultiDiffViewModal, type MultiDiffItem } from './MultiDiffViewModal';
 import { ToolRunConfirmation } from './ToolRunConfirmation';
 import './CopilotPanel.css';
 import './PlanStepCard.css';
@@ -77,6 +78,7 @@ export function PlanStepCard({
   const [blockTargets, setBlockTargets] = useState<Record<string, string>>({});
   const [blockActionStatus, setBlockActionStatus] = useState<Record<string, 'applied' | 'rejected'>>({});
   const [diffPreview, setDiffPreview] = useState<{ blockId: string; preview: ApplyPreview } | null>(null);
+  const [multiDiffPreview, setMultiDiffPreview] = useState<MultiDiffItem[] | null>(null);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [justCopiedStep, setJustCopiedStep] = useState(false);
   const [planRevisionNote, setPlanRevisionNote] = useState<string | null>(null);
@@ -341,6 +343,38 @@ export function PlanStepCard({
     setDiffPreview({ blockId: block.id, preview });
   }
 
+  async function handlePreviewAll() {
+    if (!rootHandle) return;
+    const previews: MultiDiffItem[] = [];
+    for (const block of blocks) {
+      if (blockActionStatus[block.id]) continue;
+      const targetPath = blockTargets[block.id];
+      if (!targetPath) continue;
+      const resolved = await resolveWorkspaceFiles(rootHandle, [targetPath]);
+      const node = resolved.get(targetPath);
+      const preview = node
+        ? await prepareApplyToTreeNode(node, block)
+        : prepareApplyForNewFile(rootHandle, targetPath, block);
+      if (!preview) continue;
+      previews.push({
+        id: block.id,
+        fileName: preview.fileName,
+        original: preview.original,
+        modified: preview.modified,
+        language: preview.language,
+        onApply: async () => {
+          await preview.apply();
+          markBlockHandled(block.id, 'applied');
+        },
+      });
+    }
+    if (previews.length === 0) {
+      setStatusMessage('差分を表示するには、未処理のコードブロックの適用先を指定してください。');
+      return;
+    }
+    setMultiDiffPreview(previews);
+  }
+
   function handleRejectBlock(blockId: string) {
     markBlockHandled(blockId, 'rejected');
   }
@@ -448,6 +482,14 @@ export function PlanStepCard({
 
           {blocks.length > 0 && (
             <div className="copilot-actions">
+              <button
+                onClick={() => void handlePreviewAll()}
+                disabled={
+                  !blocks.some((block) => !blockActionStatus[block.id] && Boolean(blockTargets[block.id]))
+                }
+              >
+                まとめて差分を確認
+              </button>
               <button className="primary" onClick={() => void handleApplyAll()}>
                 すべて適用
               </button>
@@ -515,6 +557,14 @@ export function PlanStepCard({
             });
           }}
           onCancel={() => setDiffPreview(null)}
+        />
+      )}
+      {multiDiffPreview && (
+        <MultiDiffViewModal
+          title="複数ファイルの差分"
+          files={multiDiffPreview}
+          onClose={() => setMultiDiffPreview(null)}
+          onAllApplied={() => setStatusMessage(`${multiDiffPreview.length}件の差分を適用しました。`)}
         />
       )}
     </div>

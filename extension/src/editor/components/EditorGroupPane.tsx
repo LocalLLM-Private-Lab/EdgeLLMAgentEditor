@@ -1,4 +1,4 @@
-import { useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
+import { useMemo, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react';
 import * as monaco from 'monaco-editor';
 import { useEditorTabsStore, tabsInGroup, type EditorTab } from '../state/editorTabsStore';
 import { useWorkspaceStore } from '../state/workspaceStore';
@@ -6,11 +6,13 @@ import { useExtensionsStore } from '../state/extensionsStore';
 import { useDismissOnOutsideClick } from '../hooks/useDismissOnOutsideClick';
 import { computeEditorDropTarget } from './editorDropTarget';
 import { MonacoEditorPane } from './MonacoEditorPane';
+import { DiffEditorPane } from './DiffEditorPane';
 import { ImageViewerPane } from './ImageViewerPane';
 import { ExtensionDetailView } from './ExtensionDetailView';
 import { FileIcon } from './FileIcon';
 import '../components/MenuBar.css';
 import './EditorGroupPane.css';
+import { useDiffViewStore } from '../state/diffViewStore';
 
 const DRAG_THRESHOLD_PX = 4;
 
@@ -157,6 +159,17 @@ export function EditorGroupPane({ groupId }: { groupId: string }) {
   const closeAllTabsInGroup = useEditorTabsStore((s) => s.closeAllTabsInGroup);
   const setFocusedGroup = useEditorTabsStore((s) => s.setFocusedGroup);
   const tabs = tabsInGroup(openFiles, groupId);
+  const allDiffViews = useDiffViewStore((s) => s.views);
+  const diffViews = useMemo(
+    () => allDiffViews.filter((view) => view.groupId === groupId),
+    [allDiffViews, groupId],
+  );
+  const activeDiffId = useDiffViewStore((s) => s.activeByGroup[groupId] ?? null);
+  const setActiveDiff = useDiffViewStore((s) => s.setActiveDiff);
+  const closeDiff = useDiffViewStore((s) => s.closeDiff);
+  const deactivateDiff = useDiffViewStore((s) => s.deactivateDiff);
+  const activeDiff = diffViews.find((view) => view.id === activeDiffId) ?? null;
+  const diffTabActive = activeDiff !== null;
 
   // An extension's detail page behaves like one more tab in this same
   // strip (see extensionsStore.ts's viewingExtensionId/Group/Active) —
@@ -207,17 +220,44 @@ export function EditorGroupPane({ groupId }: { groupId: string }) {
             isDirty={tab.isDirty}
             isPreview={tab.isPreview}
             readOnly={tab.kind === 'external-text'}
-            active={!extensionTabActive && tab.id === activeFileId}
-            onClick={() => setActiveFile(tab.id)}
+            active={!extensionTabActive && !diffTabActive && tab.id === activeFileId}
+            onClick={() => {
+              deactivateDiff(groupId);
+              setActiveFile(tab.id);
+            }}
             onClose={() => closeFile(tab.id)}
             onContextMenu={(x, y) => setTabMenu({ x, y, fileId: tab.id })}
           />
         ))}
-        {viewedExtension && (
+        {diffViews.map((view) => (
           <div
-            className={`editor-tab editor-tab-extension ${extensionTabActive ? 'active' : ''}`}
+            className={`editor-tab editor-tab-diff ${view.id === activeDiffId ? 'active' : ''}`}
+            key={view.id}
             onClick={() => {
               setFocusedGroup(groupId);
+              setActiveDiff(groupId, view.id);
+            }}
+            title={`${view.originalName} ↔ ${view.modifiedName}`}
+          >
+            <span className="editor-tab-name">差分: {view.title}</span>
+            <button
+              className="editor-tab-close"
+              onClick={(e) => {
+                e.stopPropagation();
+                closeDiff(groupId, view.id);
+              }}
+              aria-label="差分タブを閉じる"
+            >
+              ×
+            </button>
+          </div>
+        ))}
+        {viewedExtension && (
+          <div
+            className={`editor-tab editor-tab-extension ${extensionTabActive && !diffTabActive ? 'active' : ''}`}
+            onClick={() => {
+              setFocusedGroup(groupId);
+              deactivateDiff(groupId);
               viewExtension(viewedExtension.id);
             }}
           >
@@ -297,18 +337,23 @@ export function EditorGroupPane({ groupId }: { groupId: string }) {
             isn't. */}
         <div
           className="editor-group-content-slot"
-          style={{ display: extensionTabActive || imageTabActive ? 'none' : 'block' }}
+          style={{ display: extensionTabActive || imageTabActive || diffTabActive ? 'none' : 'block' }}
         >
           <MonacoEditorPane groupId={groupId} />
         </div>
         {hostsExtensionTab && (
-          <div className="editor-group-content-slot" style={{ display: extensionTabActive ? 'block' : 'none' }}>
+          <div className="editor-group-content-slot" style={{ display: extensionTabActive && !diffTabActive ? 'block' : 'none' }}>
             <ExtensionDetailView />
           </div>
         )}
-        {imageTabActive && (
+        {imageTabActive && !diffTabActive && (
           <div className="editor-group-content-slot">
             <ImageViewerPane groupId={groupId} />
+          </div>
+        )}
+        {activeDiff && (
+          <div className="editor-group-content-slot editor-group-diff-slot" style={{ display: diffTabActive ? 'block' : 'none' }}>
+            <DiffEditorPane view={activeDiff} />
           </div>
         )}
       </div>

@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import * as monaco from 'monaco-editor';
-import { ensureLanguageTokenization } from '../monaco/textmateTokenization';
+import { ensureLanguageTokenization, isCustomThemeReady, TEXTMATE_THEME_ID } from '../monaco/textmateTokenization';
 import './DiffViewModal.css';
 
 interface DiffViewModalProps {
@@ -32,10 +32,11 @@ export function DiffViewModal({
     void ensureLanguageTokenization(language).then(() => {
       if (disposed || !containerRef.current) return;
       diffEditor = monaco.editor.createDiffEditor(containerRef.current, {
-        readOnly: true,
+        readOnly: false,
+        originalEditable: false,
         renderSideBySide: true,
         automaticLayout: true,
-        theme: 'dark-plus',
+        theme: isCustomThemeReady() ? TEXTMATE_THEME_ID : 'vs-dark',
       });
       originalModel = monaco.editor.createModel(original, language);
       modifiedModel = monaco.editor.createModel(modified, language);

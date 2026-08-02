@@ -5,6 +5,7 @@ import { initVimMode, VimMode, StatusBar as VimStatusBar } from 'monaco-vim';
 import { EmacsExtension, registerGlobalCommand } from 'monaco-emacs';
 import { useEditorTabsStore } from '../state/editorTabsStore';
 import { useKeybindingStore, type VimSubMode } from '../state/keybindingStore';
+import { useBreakpointStore } from '../state/breakpointStore';
 import { setupMonacoEnvironment } from '../monaco/setupMonacoEnvironment';
 import { getActiveEditor, setActiveEditor } from '../monaco/editorInstanceRegistry';
 import { getKeybindingStatusNode } from '../monaco/keybindingStatusRegistry';
@@ -15,6 +16,7 @@ setupMonacoEnvironment();
 ensureLspProvidersRegistered();
 
 type KeybindingBinding = { dispose: () => void };
+const EMPTY_BREAKPOINTS: number[] = [];
 
 // `VimMode.Vim` (CodeMirror's Vim singleton, used for `defineEx`) is
 // attached at runtime (`CMAdapter.Vim = Vim()`) but not present in
@@ -452,6 +454,10 @@ export function MonacoEditorPane({ groupId }: { groupId: string }) {
   const saveFile = useEditorTabsStore((s) => s.saveFile);
   const setFocusedGroup = useEditorTabsStore((s) => s.setFocusedGroup);
   const keybindingMode = useKeybindingStore((s) => s.mode);
+  const activePath = openFiles.find((file) => file.id === groupActiveFileId)?.pathSegments.join('/') ?? '';
+  const breakpointLines = useBreakpointStore((s) => s.breakpoints[activePath] ?? EMPTY_BREAKPOINTS);
+  const toggleBreakpoint = useBreakpointStore((s) => s.toggleBreakpoint);
+  const breakpointDecorationIdsRef = useRef<string[]>([]);
 
   useEffect(() => {
     if (!containerRef.current) return;
@@ -471,6 +477,7 @@ export function MonacoEditorPane({ groupId }: { groupId: string }) {
       theme: isCustomThemeReady() ? TEXTMATE_THEME_ID : 'vs-dark',
       fontSize: 13,
       minimap: { enabled: true },
+      glyphMargin: true,
     });
     editorRef.current = editor;
     // Every group gets its own Monaco instance; "the active editor" (what
@@ -498,8 +505,39 @@ export function MonacoEditorPane({ groupId }: { groupId: string }) {
       editor.updateOptions({ wordWrap: current === 'on' ? 'off' : 'on' });
     });
 
+    const breakpointListener = editor.onMouseDown((event) => {
+      if (
+        event.target.type !== monaco.editor.MouseTargetType.GUTTER_GLYPH_MARGIN &&
+        event.target.type !== monaco.editor.MouseTargetType.GUTTER_LINE_NUMBERS
+      ) return;
+      const model = editor.getModel();
+      if (!model) return;
+      const tab = useEditorTabsStore.getState().openFiles.find((file) => file.model === model);
+      if (!tab) return;
+
+      // `position`/`range` on a glyph-margin mouse target can be an
+      // approximate position (and may fall back to line 1 when the glyph
+      // widget itself is hit). Calculate the line from the actual editor
+      // viewport coordinate first so scrolling and the clicked row are both
+      // respected.
+      const browserEvent = event.event.browserEvent;
+      const editorNode = editor.getDomNode();
+      const editorRect = editorNode?.getBoundingClientRect();
+      const lineHeight = editor.getLineHeightForPosition({ lineNumber: 1, column: 1 });
+      const firstLineTop = editor.getTopForLineNumber(1);
+      const lineNumber = editorRect && lineHeight > 0
+        ? Math.floor((browserEvent.clientY - editorRect.top + editor.getScrollTop() - firstLineTop) / lineHeight) + 1
+        : editor.getTargetAtClientPoint(browserEvent.clientX, browserEvent.clientY)?.range?.startLineNumber
+          ?? event.target.range?.startLineNumber
+          ?? event.target.position?.lineNumber;
+      if (lineNumber && lineNumber >= 1 && lineNumber <= model.getLineCount()) {
+        toggleBreakpoint(tab.pathSegments.join('/'), lineNumber);
+      }
+    });
+
     return () => {
       focusListener.dispose();
+      breakpointListener.dispose();
       // Only clear the registry if this instance is still the one in it —
       // an unmounting group that *isn't* the currently-focused one (e.g.
       // its last tab just got dragged elsewhere and the group collapsed)
@@ -508,7 +546,7 @@ export function MonacoEditorPane({ groupId }: { groupId: string }) {
       editor.dispose();
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [toggleBreakpoint]);
 
   useEffect(() => {
     const editor = editorRef.current;
@@ -521,6 +559,21 @@ export function MonacoEditorPane({ groupId }: { groupId: string }) {
     // loadExternalFile).
     editor.updateOptions({ readOnly: activeTab?.kind === 'external-text' });
   }, [groupActiveFileId, openFiles]);
+
+  useEffect(() => {
+    const editor = editorRef.current;
+    const model = editor?.getModel();
+    if (!editor || !model) return;
+    breakpointDecorationIdsRef.current = editor.deltaDecorations(
+      breakpointDecorationIdsRef.current,
+      breakpointLines
+        .filter((line) => line > 0 && line <= model.getLineCount())
+        .map((line) => ({
+          range: new monaco.Range(line, 1, line, 1),
+          options: { glyphMarginClassName: 'editor-breakpoint-glyph' },
+        })),
+    );
+  }, [breakpointLines, groupActiveFileId, openFiles]);
 
   // Applies the selected vim/emacs input-intercept layer on top of the
   // editor instance. This is separate from (and doesn't touch) the Ctrl+S /

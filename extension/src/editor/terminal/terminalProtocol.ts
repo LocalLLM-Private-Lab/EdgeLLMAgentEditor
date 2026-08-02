@@ -13,6 +13,18 @@ export type ClientMessage =
   | { type: 'stdin'; session_id: string; data: string }
   | { type: 'resize'; session_id: string; cols: number; rows: number }
   | { type: 'close'; session_id: string }
+  | {
+      type: 'debug_start';
+      session_id: string;
+      adapter_command: string;
+      adapter_args: string[];
+      adapter_transport: 'stdio' | 'tcp';
+      adapter_port?: number;
+      cwd?: string;
+    }
+  | { type: 'debug_request'; session_id: string; message: Record<string, unknown> }
+  | { type: 'debug_stop'; session_id: string }
+  | { type: 'debug_ensure_adapter'; request_id: string; language: string }
   | { type: 'ext_host_install'; extension_id: string; archive_base64: string }
   | { type: 'ext_host_activate'; extension_id: string; config: Record<string, unknown>; workspace_root: string | null }
   | { type: 'ext_host_deactivate'; extension_id: string }
@@ -27,6 +39,23 @@ export type ServerMessage =
   | { type: 'stdout'; session_id: string; data: string }
   | { type: 'exited'; session_id: string; exit_code: number | null }
   | { type: 'error'; session_id: string | null; message: string }
+  | { type: 'debug_started'; session_id: string; pid: number }
+  | { type: 'debug_message'; session_id: string; message: Record<string, unknown> }
+  | { type: 'debug_output'; session_id: string; data: string }
+  | { type: 'debug_exited'; session_id: string; exit_code: number | null }
+  | { type: 'debug_error'; session_id: string; message: string }
+  | { type: 'debug_adapter_installing'; request_id: string; language: string; message: string }
+  | {
+      type: 'debug_adapter_ready';
+      request_id: string;
+      language: string;
+      adapter_command: string;
+      adapter_args: string[];
+      adapter_transport: 'stdio' | 'tcp';
+      adapter_port: number | null;
+      message: string;
+    }
+  | { type: 'debug_adapter_error'; request_id: string; language: string; message: string }
   | { type: 'ext_host_installed'; extension_id: string }
   | { type: 'ext_host_activated'; extension_id: string; commands: string[] }
   | { type: 'ext_host_log'; extension_id: string; level: string; message: string }

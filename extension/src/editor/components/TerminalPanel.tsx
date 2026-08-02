@@ -118,7 +118,7 @@ export function TerminalPanel({ backgroundCaptureOnly = false }: { backgroundCap
   // Sends workspaceRealPath as cwd when known (see below); otherwise cwd
   // is omitted and terminal-host falls back to its own launch directory
   // (see terminal-host/src/pty_session.rs's default_cwd()).
-  function openSession(label?: string): string {
+  function openSession(label?: string, sessionCwd?: string): string {
     const id = uuid();
     if (label) setSessionLabels((prev) => ({ ...prev, [id]: label }));
     if (!hostRef.current) return id;
@@ -193,7 +193,7 @@ export function TerminalPanel({ backgroundCaptureOnly = false }: { backgroundCap
       // instead of wherever terminal-host itself happens to be running
       // from. undefined (not sent) when unknown, so terminal-host falls
       // back to its own launch directory as before.
-      cwd: useWorkspaceStore.getState().workspaceRealPath ?? undefined,
+      cwd: sessionCwd ?? useWorkspaceStore.getState().workspaceRealPath ?? undefined,
     });
 
     setSessionIds((prev) => [...prev, id]);
@@ -230,7 +230,7 @@ export function TerminalPanel({ backgroundCaptureOnly = false }: { backgroundCap
     ) return;
     const req = consumePendingCaptureRun();
     if (!req) return;
-    const sessionId = openSession(req.label);
+    const sessionId = openSession(req.label, req.cwd);
     req.onSessionOpened(sessionId);
     send({
       type: 'stdin',

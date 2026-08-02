@@ -19,6 +19,7 @@ use tokio::time::{Duration, sleep};
 
 use crate::auth::is_authorized;
 use crate::config::HostConfig;
+use crate::debug_adapter::{self, DebugSession};
 use crate::ext_host::{self, ExtHostProcess};
 use crate::protocol::{ClientMessage, ServerMessage};
 use crate::pty_session::PtySession;
@@ -167,6 +168,7 @@ async fn handle_socket(socket: WebSocket, active_connections: Arc<AtomicUsize>, 
     });
 
     let mut sessions: HashMap<String, PtySession> = HashMap::new();
+    let mut debug_sessions: HashMap<String, DebugSession> = HashMap::new();
     let mut ext_hosts: HashMap<String, ExtHostProcess> = HashMap::new();
 
     while let Some(Ok(msg)) = ws_rx.next().await {
@@ -228,6 +230,91 @@ async fn handle_socket(socket: WebSocket, active_connections: Arc<AtomicUsize>, 
                 if let Some(mut session) = sessions.remove(&session_id) {
                     let _ = session.kill();
                 }
+            }
+            ClientMessage::DebugStart {
+                session_id,
+                adapter_command,
+                adapter_args,
+                adapter_transport,
+                adapter_port,
+                cwd,
+            } => {
+                if let Some(old) = debug_sessions.remove(&session_id) {
+                    old.stop();
+                }
+                match debug_adapter::spawn(
+                    adapter_command,
+                    adapter_args,
+                    adapter_transport,
+                    adapter_port,
+                    cwd,
+                    session_id.clone(),
+                    out_tx.clone(),
+                ) {
+                    Ok((session, pid)) => {
+                        debug_sessions.insert(session_id.clone(), session);
+                        let _ = out_tx.send(ServerMessage::DebugStarted { session_id, pid });
+                    }
+                    Err(err) => {
+                        let _ = out_tx.send(ServerMessage::DebugError {
+                            session_id,
+                            message: err.to_string(),
+                        });
+                    }
+                }
+            }
+            ClientMessage::DebugRequest {
+                session_id,
+                message,
+            } => {
+                if let Some(session) = debug_sessions.get(&session_id)
+                    && let Err(err) = session.send(message)
+                {
+                    let _ = out_tx.send(ServerMessage::DebugError {
+                        session_id,
+                        message: err.to_string(),
+                    });
+                }
+            }
+            ClientMessage::DebugStop { session_id } => {
+                if let Some(session) = debug_sessions.remove(&session_id) {
+                    session.stop();
+                }
+            }
+            ClientMessage::DebugEnsureAdapter {
+                request_id,
+                language,
+            } => {
+                let progress_tx = out_tx.clone();
+                let progress_language = language.clone();
+                let progress_request_id = request_id.clone();
+                let _ = progress_tx.send(ServerMessage::DebugAdapterInstalling {
+                    request_id: progress_request_id,
+                    language: progress_language,
+                    message: "DAPアダプターを確認しています...".into(),
+                });
+                tokio::spawn(async move {
+                    match debug_adapter::ensure_adapter(language.clone()).await {
+                        Ok(spec) => {
+                            let _ = progress_tx.send(ServerMessage::DebugAdapterReady {
+                                request_id,
+                                language,
+                                adapter_command: spec.command,
+                                adapter_args: spec.args,
+                                adapter_transport: spec.transport,
+                                adapter_port: spec.port,
+                                message: spec.message,
+                            });
+                        }
+                        Err(err) => {
+                            let _ = progress_tx.send(ServerMessage::DebugAdapterError {
+                                request_id,
+                                language,
+                                message: err.to_string(),
+                            });
+                        }
+                    }
+                });
             }
             ClientMessage::ExtHostInstall {
                 extension_id,
@@ -340,6 +427,9 @@ async fn handle_socket(socket: WebSocket, active_connections: Arc<AtomicUsize>, 
     // orphaned shells/processes running.
     for (_, mut session) in sessions.drain() {
         let _ = session.kill();
+    }
+    for (_, session) in debug_sessions.drain() {
+        session.stop();
     }
     for (_, mut process) in ext_hosts.drain() {
         let _ = process.kill();

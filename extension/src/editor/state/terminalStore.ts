@@ -22,6 +22,7 @@ const SETTINGS_STORAGE_KEY = 'terminalHostSettings';
 export interface PendingCaptureRun {
   command: string;
   label: string;
+  cwd?: string;
   background?: boolean;
   onSessionOpened: (sessionId: string) => void;
 }
@@ -53,6 +54,8 @@ interface TerminalState {
    * yet, or a platform without one) — the manual form stays as a backstop,
    * it just isn't the primary path anymore. */
   ensureConnected: () => Promise<void>;
+  /** Waits until the WebSocket handshake has completed after connect(). */
+  waitForConnection: (timeoutMs?: number) => Promise<boolean>;
   connect: () => void;
   disconnect: () => void;
   send: (msg: ClientMessage) => void;
@@ -64,6 +67,7 @@ interface TerminalState {
     label: string,
     onSessionOpened: (sessionId: string) => void,
     background?: boolean,
+    cwd?: string,
   ) => void;
   consumePendingCaptureRun: () => PendingCaptureRun | null;
 }
@@ -91,10 +95,41 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     if (result.status === 'started' || result.status === 'already_running') {
       await get().saveSettings({ port: result.port, token: result.token });
       get().connect();
+      await get().waitForConnection();
       return;
     }
     await get().loadSettings();
-    if (get().settings) get().connect();
+    if (get().settings) {
+      get().connect();
+      await get().waitForConnection();
+    }
+  },
+
+  waitForConnection: async (timeoutMs = 8000) => {
+    if (get().connectionState === 'connected') return true;
+
+    return new Promise<boolean>((resolve) => {
+      let settled = false;
+      let timeoutId: ReturnType<typeof setTimeout> | undefined;
+      let unsubscribe: (() => void) | undefined;
+
+      const finish = (connected: boolean) => {
+        if (settled) return;
+        settled = true;
+        if (timeoutId !== undefined) clearTimeout(timeoutId);
+        unsubscribe?.();
+        resolve(connected);
+      };
+
+      unsubscribe = useTerminalStore.subscribe((state) => {
+        if (state.connectionState === 'connected') finish(true);
+      });
+      timeoutId = setTimeout(() => finish(get().connectionState === 'connected'), timeoutMs);
+
+      // The connection may have completed between the initial check and
+      // subscribing to the store.
+      if (get().connectionState === 'connected') finish(true);
+    });
   },
 
   connect: () => {
@@ -136,7 +171,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
     return cmd;
   },
 
-  queueCaptureRun: (command, label, onSessionOpened, background = false) => {
+  queueCaptureRun: (command, label, onSessionOpened, background = false, cwd) => {
     if (get().pendingCaptureRun) {
       // Two capture-runs queued before the first one's been picked up by
       // TerminalPanel (should only happen within the same render tick,
@@ -146,7 +181,7 @@ export const useTerminalStore = create<TerminalState>((set, get) => ({
       // eslint-disable-next-line no-console
       console.warn('terminalStore: pendingCaptureRun overwritten before it was consumed');
     }
-    set({ pendingCaptureRun: { command, label, onSessionOpened, background } });
+    set({ pendingCaptureRun: { command, label, onSessionOpened, background, cwd } });
   },
 
   consumePendingCaptureRun: () => {

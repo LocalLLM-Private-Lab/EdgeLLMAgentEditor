@@ -15,6 +15,10 @@ export interface RunAndCaptureResult {
 export interface RunAndCaptureOptions {
   /** Close the temporary terminal session as soon as the command exits. */
   background?: boolean;
+  /** Working directory for the temporary terminal session. */
+  cwd?: string;
+  /** Receives the captured output while the command is still running. */
+  onOutput?: (output: string) => void;
 }
 
 const CONNECT_TIMEOUT_MS = 8000;
@@ -28,6 +32,11 @@ function stripTerminalControlSequences(text: string): string {
     .replace(/[\x00-\x08\x0B\x0C\x0E-\x1F\x7F]/g, '');
 }
 /* eslint-enable no-control-regex */
+
+function outputAfterCaptureMarker(output: string, marker: string): string {
+  const markerIndex = output.lastIndexOf(marker);
+  return markerIndex >= 0 ? output.slice(markerIndex + marker.length).replace(/^\r?\n/, '') : '';
+}
 
 /** Runs `command` in a brand-new, labeled terminal session (never reusing
  * whatever session is currently active — see terminalStore's
@@ -66,15 +75,17 @@ export async function runAndCapture(
       if (!sessionId || !('session_id' in msg) || msg.session_id !== sessionId) return;
       if (msg.type === 'stdout') {
         output += decoder.decode(base64ToBytes(msg.data), { stream: true });
+        if (options.onOutput) {
+          options.onOutput(stripTerminalControlSequences(outputAfterCaptureMarker(output, captureMarker)));
+        }
       } else if (msg.type === 'exited') {
         output += decoder.decode();
         unsubscribe();
         if (options.background) {
           useTerminalStore.getState().send({ type: 'close', session_id: sessionId });
         }
-        const markerIndex = output.lastIndexOf(captureMarker);
-        const capturedOutput =
-          markerIndex >= 0 ? output.slice(markerIndex + captureMarker.length).replace(/^\r?\n/, '') : output;
+        const capturedOutput = outputAfterCaptureMarker(output, captureMarker) || output;
+        options.onOutput?.(stripTerminalControlSequences(capturedOutput));
         resolve({ command, output: stripTerminalControlSequences(capturedOutput), exitCode: msg.exit_code });
       }
     });
@@ -101,6 +112,7 @@ export async function runAndCapture(
         sessionId = id;
       },
       options.background,
+      options.cwd,
     );
   });
 }

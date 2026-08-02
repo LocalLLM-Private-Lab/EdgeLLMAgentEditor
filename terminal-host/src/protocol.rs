@@ -26,6 +26,31 @@ pub enum ClientMessage {
     Close {
         session_id: String,
     },
+    /// Starts a Debug Adapter Protocol (DAP) adapter as a background child
+    /// process. The browser sends the adapter executable and arguments so
+    /// the same host can support Python, Node, C/C++ and other adapters.
+    DebugStart {
+        session_id: String,
+        adapter_command: String,
+        adapter_args: Vec<String>,
+        adapter_transport: String,
+        adapter_port: Option<u16>,
+        cwd: Option<String>,
+    },
+    /// Forwards one complete DAP JSON message to an active adapter.
+    DebugRequest {
+        session_id: String,
+        message: serde_json::Value,
+    },
+    /// Stops an active debug adapter process.
+    DebugStop {
+        session_id: String,
+    },
+    /// Finds or installs a known DAP adapter in the user's environment.
+    DebugEnsureAdapter {
+        request_id: String,
+        language: String,
+    },
     /// Unpacks a base64-encoded zip (vsix or otherwise) to this host's
     /// on-disk extension cache (`ext-cache/<extension_id>/`). Separate from
     /// `ExtHostActivate` so the browser can install now and activate later
@@ -130,6 +155,45 @@ pub enum ServerMessage {
     },
     Error {
         session_id: Option<String>,
+        message: String,
+    },
+    DebugStarted {
+        session_id: String,
+        pid: u32,
+    },
+    DebugMessage {
+        session_id: String,
+        message: serde_json::Value,
+    },
+    DebugOutput {
+        session_id: String,
+        data: String,
+    },
+    DebugExited {
+        session_id: String,
+        exit_code: Option<i32>,
+    },
+    DebugError {
+        session_id: String,
+        message: String,
+    },
+    DebugAdapterInstalling {
+        request_id: String,
+        language: String,
+        message: String,
+    },
+    DebugAdapterReady {
+        request_id: String,
+        language: String,
+        adapter_command: String,
+        adapter_args: Vec<String>,
+        adapter_transport: String,
+        adapter_port: Option<u16>,
+        message: String,
+    },
+    DebugAdapterError {
+        request_id: String,
+        language: String,
         message: String,
     },
     ExtHostInstalled {

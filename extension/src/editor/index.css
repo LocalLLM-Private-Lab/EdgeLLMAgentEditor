@@ -45,6 +45,15 @@
   box-sizing: border-box;
 }
 
+.editor-breakpoint-glyph {
+  /* Monaco owns the glyph-margin slot dimensions. Keep that slot aligned
+   * with one editor line and draw only a small dot in its exact center. */
+  width: 16px !important;
+  height: 18px !important;
+  margin: 0 !important;
+  background: radial-gradient(circle, #e51400 0 4px, transparent 4.5px) center / 100% 100% no-repeat !important;
+}
+
 html,
 body,
 #root {

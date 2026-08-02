@@ -10,6 +10,9 @@ import { DEFAULT_PLAN_PROMPT_TEMPLATE, DEFAULT_STEP_PROMPT_TEMPLATE } from '../c
 import { useRunCommandStore, type RunCommandMap } from '../state/runCommandStore';
 import { useNamedCommandStore, type NamedCommandMap } from '../state/namedCommandStore';
 import { useKeybindingStore, type KeybindingMode } from '../state/keybindingStore';
+import { useBuildStore, DEFAULT_DEBUG_LAUNCH_CONFIG } from '../state/buildStore';
+import { parseProjectLaunchConfigurations, parseProjectTasks, useProjectTaskStore } from '../state/projectTaskStore';
+import { useWorkspaceStore } from '../state/workspaceStore';
 import { useExtensionsStore, type InstalledExtension } from '../state/extensionsStore';
 import { makeExtensionSettingsCategory, parseExtensionSettingsCategory } from '../extensions/extensionSettingsCategory';
 import { ExtensionConfigFields } from './ExtensionConfigFields';
@@ -18,7 +21,7 @@ import './PromptTemplateSettingsModal.css';
 import './RunCommandSettingsModal.css';
 import './SettingsModal.css';
 
-type BuiltinSettingsCategory = 'keybinding' | 'promptTemplates' | 'planTemplates' | 'runCommands' | 'namedCommands';
+type BuiltinSettingsCategory = 'keybinding' | 'buildAndDebug' | 'promptTemplates' | 'planTemplates' | 'runCommands' | 'namedCommands';
 /** Built-in categories are fixed; an installed extension's own
  * `contributes.configuration` gets a dynamic category
  * (`ext:<extensionId>`, see extensionSettingsCategory.ts) added to the nav
@@ -29,6 +32,7 @@ export type SettingsCategory = BuiltinSettingsCategory | string;
 
 const CATEGORY_LABELS: Record<BuiltinSettingsCategory, string> = {
   keybinding: 'キーバインド',
+  buildAndDebug: 'ビルド・デバッグ',
   promptTemplates: '単発プロンプトテンプレート',
   planTemplates: '計画プロンプトテンプレート',
   runCommands: '拡張子ごとの実行コマンド',
@@ -48,7 +52,7 @@ function categoryLabel(id: SettingsCategory, extensions: InstalledExtension[]): 
 // wide preferences, not Copilot ones, so they sit under 一般; only the
 // prompt-template settings are actually Copilot-specific.
 const STATIC_NAV_GROUPS: { label: string; items: SettingsCategory[] }[] = [
-  { label: '一般', items: ['keybinding', 'runCommands', 'namedCommands'] },
+  { label: '一般', items: ['keybinding', 'buildAndDebug', 'runCommands', 'namedCommands'] },
   { label: 'Copilot', items: ['promptTemplates', 'planTemplates'] },
 ];
 
@@ -80,6 +84,32 @@ function namedCommandRowsToMap(rows: NamedCommandRow[]): NamedCommandMap {
     if (name && row.command.trim()) map[name] = row.command.trim();
   }
   return map;
+}
+
+function defaultProjectTasksJson(buildCommand: string): string {
+  return JSON.stringify({
+    version: 1,
+    tasks: buildCommand.trim() ? [{ id: 'build', label: 'ビルド', command: buildCommand.trim() }] : [],
+  }, null, 2);
+}
+
+function defaultProjectLaunchJson(
+  debugLaunchConfig: string,
+  adapterCommand: string,
+  adapterArgs: string,
+  autoInstallDebugAdapter: boolean,
+): string {
+  let configuration: Record<string, unknown> = {};
+  try {
+    const parsed: unknown = JSON.parse(debugLaunchConfig);
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) configuration = parsed as Record<string, unknown>;
+  } catch {
+    configuration = JSON.parse(DEFAULT_DEBUG_LAUNCH_CONFIG);
+  }
+  if (adapterCommand.trim()) configuration.adapterCommand = adapterCommand.trim();
+  if (adapterArgs.trim()) configuration.adapterArgs = adapterArgs.trim();
+  configuration.autoInstallDebugAdapter = autoInstallDebugAdapter;
+  return JSON.stringify({ version: 1, configurations: [configuration] }, null, 2);
 }
 
 const AUTO_SAVE_DEBOUNCE_MS = 500;
@@ -167,6 +197,45 @@ export function SettingsModal({ initialCategory, onClose }: { initialCategory: S
   const keybindingMode = useKeybindingStore((s) => s.mode);
   const setKeybindingMode = useKeybindingStore((s) => s.setMode);
 
+  const buildCommand = useBuildStore((s) => s.buildCommand);
+  const debugAdapterCommand = useBuildStore((s) => s.debugAdapterCommand);
+  const debugAdapterArgs = useBuildStore((s) => s.debugAdapterArgs);
+  const autoInstallDebugAdapter = useBuildStore((s) => s.autoInstallDebugAdapter);
+  const debugLaunchConfig = useBuildStore((s) => s.debugLaunchConfig);
+  const setBuildCommand = useBuildStore((s) => s.setBuildCommand);
+  const setDebugAdapterCommand = useBuildStore((s) => s.setDebugAdapterCommand);
+  const setDebugAdapterArgs = useBuildStore((s) => s.setDebugAdapterArgs);
+  const setAutoInstallDebugAdapter = useBuildStore((s) => s.setAutoInstallDebugAdapter);
+  const setDebugLaunchConfig = useBuildStore((s) => s.setDebugLaunchConfig);
+  const saveBuildSettings = useBuildStore((s) => s.saveSettings);
+
+  const rootHandle = useWorkspaceStore((s) => s.rootHandle);
+  const projectTasksJson = useProjectTaskStore((s) => s.tasksJson);
+  const projectLaunchJson = useProjectTaskStore((s) => s.launchJson);
+  const projectSettingsLoaded = useProjectTaskStore((s) => s.loaded);
+  const projectSettingsLoading = useProjectTaskStore((s) => s.loading);
+  const projectSettingsSaving = useProjectTaskStore((s) => s.saving);
+  const projectSettingsError = useProjectTaskStore((s) => s.errorMessage);
+  const loadProjectSettings = useProjectTaskStore((s) => s.loadProjectSettings);
+  const saveProjectSettings = useProjectTaskStore((s) => s.saveProjectSettings);
+  const setProjectTasksJson = useProjectTaskStore((s) => s.setTasksJson);
+  const setProjectLaunchJson = useProjectTaskStore((s) => s.setLaunchJson);
+  const [projectSettingsDraftError, setProjectSettingsDraftError] = useState<string | null>(null);
+  const projectSettingsSave = useDebouncedSave(async (value: { tasksJson: string; launchJson: string }) => {
+    try {
+      parseProjectTasks(value.tasksJson);
+      parseProjectLaunchConfigurations(value.launchJson);
+      await saveProjectSettings(value.tasksJson, value.launchJson);
+      setProjectSettingsDraftError(null);
+    } catch (error) {
+      setProjectSettingsDraftError(error instanceof Error ? error.message : 'プロジェクト設定を保存できません。');
+    }
+  });
+
+  useEffect(() => {
+    void loadProjectSettings();
+  }, [loadProjectSettings, rootHandle]);
+
   const installedExtensions = useExtensionsStore((s) => s.extensions);
   const extensionsWithSettings = useMemo(
     () => installedExtensions.filter((e) => e.configSchema.length > 0),
@@ -186,7 +255,38 @@ export function SettingsModal({ initialCategory, onClose }: { initialCategory: S
     stepSave.flush();
     runCommandsSave.flush();
     namedCommandsSave.flush();
+    projectSettingsSave.flush();
     onClose();
+  }
+
+  function updateProjectSettings(next: { tasksJson: string; launchJson: string }) {
+    setProjectTasksJson(next.tasksJson);
+    setProjectLaunchJson(next.launchJson);
+    try {
+      parseProjectTasks(next.tasksJson);
+      parseProjectLaunchConfigurations(next.launchJson);
+      setProjectSettingsDraftError(null);
+      projectSettingsSave.schedule(next);
+    } catch (error) {
+      setProjectSettingsDraftError(error instanceof Error ? error.message : 'JSONの形式を確認してください。');
+    }
+  }
+
+  function initializeProjectSettings() {
+    const next = {
+      tasksJson: projectTasksJson.trim() ? projectTasksJson : defaultProjectTasksJson(buildCommand),
+      launchJson: projectLaunchJson.trim() ? projectLaunchJson : defaultProjectLaunchJson(debugLaunchConfig, debugAdapterCommand, debugAdapterArgs, autoInstallDebugAdapter),
+    };
+    setProjectTasksJson(next.tasksJson);
+    setProjectLaunchJson(next.launchJson);
+    try {
+      parseProjectTasks(next.tasksJson);
+      parseProjectLaunchConfigurations(next.launchJson);
+      setProjectSettingsDraftError(null);
+      projectSettingsSave.now(next);
+    } catch (error) {
+      setProjectSettingsDraftError(error instanceof Error ? error.message : 'JSONの形式を確認してください。');
+    }
   }
 
   function addRunCommandRow() {
@@ -336,6 +436,54 @@ export function SettingsModal({ initialCategory, onClose }: { initialCategory: S
                   <option value="vim">Vim</option>
                   <option value="emacs">Emacs</option>
                 </select>
+              </div>
+            </div>
+            <div className="prompt-template-body settings-build-body" style={{ display: category === 'buildAndDebug' ? 'flex' : 'none' }}>
+              <div className="settings-row">
+                <div className="settings-row-label">ビルド・デバッグ設定</div>
+                <p className="settings-row-description">
+                  プロジェクト設定がある場合は、tasks.jsonのbuild/runタスクとlaunch.jsonの先頭の構成が優先されます。JSONを変更すると自動的にワークスペースへ保存されます。
+                </p>
+                <label className="settings-checkbox-row">
+                  <input
+                    type="checkbox"
+                    checked={autoInstallDebugAdapter}
+                    onChange={(e) => {
+                      setAutoInstallDebugAdapter(e.target.checked);
+                      void saveBuildSettings();
+                    }}
+                  />
+                  launch.jsonにアダプター指定がない場合はDAPアダプターを自動導入する
+                </label>
+              </div>
+
+              <div className="settings-row">
+                <div className="settings-row-label">ローカルのフォールバック設定</div>
+                <p className="settings-row-description">プロジェクト設定に該当項目がない場合に使用されます。</p>
+                <input className="settings-text-input" value={buildCommand} onChange={(e) => setBuildCommand(e.target.value)} onBlur={() => void saveBuildSettings()} placeholder="ビルドコマンド (例: npm run build)" />
+                <input className="settings-text-input" value={debugAdapterCommand} onChange={(e) => setDebugAdapterCommand(e.target.value)} onBlur={() => void saveBuildSettings()} placeholder="DAPアダプター (例: python)" />
+                <input className="settings-text-input" value={debugAdapterArgs} onChange={(e) => setDebugAdapterArgs(e.target.value)} onBlur={() => void saveBuildSettings()} placeholder={'アダプター引数 (例: ["-m", "debugpy.adapter"])'} />
+                <textarea className="settings-json-textarea" value={debugLaunchConfig} onChange={(e) => setDebugLaunchConfig(e.target.value)} onBlur={() => void saveBuildSettings()} rows={3} placeholder="起動設定JSON" />
+              </div>
+
+              <div className="settings-row">
+                <div className="settings-row-label-with-action">
+                  <span className="settings-row-label">プロジェクト設定</span>
+                  <button className="settings-reset-btn" onClick={initializeProjectSettings} disabled={!rootHandle}>未設定なら初期化して保存</button>
+                </div>
+                <p className="settings-row-description">
+                  保存先: .m365ce/tasks.json / .m365ce/launch.json。{projectSettingsLoading ? '読み込み中...' : projectSettingsLoaded ? '読み込み済み' : '未読み込み'}
+                </p>
+                <label className="settings-json-label">
+                  tasks.json
+                  <textarea className="settings-json-textarea settings-project-json" value={projectTasksJson} onChange={(e) => updateProjectSettings({ tasksJson: e.target.value, launchJson: projectLaunchJson })} rows={9} spellCheck={false} placeholder={'{"version":1,"tasks":[{"id":"build","label":"ビルド","command":"npm run build"}]}' } />
+                </label>
+                <label className="settings-json-label">
+                  launch.json
+                  <textarea className="settings-json-textarea settings-project-json" value={projectLaunchJson} onChange={(e) => updateProjectSettings({ tasksJson: projectTasksJson, launchJson: e.target.value })} rows={11} spellCheck={false} placeholder={'{"version":1,"configurations":[{"name":"現在のファイル","type":"pwa-node","request":"launch","program":"{file}","cwd":"{workspace}"}]}' } />
+                </label>
+                <div className="settings-save-status">{projectSettingsSaving ? '保存中...' : projectSettingsLoaded ? '変更は自動保存されます' : ''}</div>
+                {(projectSettingsDraftError || projectSettingsError) && <div className="settings-error">{projectSettingsDraftError || projectSettingsError}</div>}
               </div>
             </div>
             <div className="prompt-template-split" style={{ display: category === 'promptTemplates' ? 'flex' : 'none' }}>

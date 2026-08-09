@@ -13,6 +13,17 @@
 // Windows-only for now; the platform dispatch (installWindows/installLinux)
 // is deliberately structured so adding Linux later is a contained addition
 // — see installLinux()'s comment for what that would involve.
+//
+// --skip-native-messaging: some org-managed Edge installs set the
+// NativeMessagingUserLevelHosts policy to disable HKCU registration
+// outright, which forces HKLM registration — and that needs local admin
+// rights this script's user may simply not have (nothing on the Edge or
+// Windows side to work around; the policy exists specifically to require
+// admin approval for native messaging hosts). Pass this flag to still
+// build both companion processes but skip registration entirely, and fall
+// back to launching terminal-host.exe/lsp-host.exe by hand and pasting
+// their printed port/token into the extension once — see the printed
+// instructions at the end of a `--skip-native-messaging` run.
 
 const { spawnSync } = require('child_process');
 const fs = require('fs');
@@ -20,6 +31,15 @@ const path = require('path');
 
 const REPO_ROOT = path.join(__dirname, '..');
 const EXT_ID = 'fehlbbjdbgjgjnbgjnhcehkdgnlagboo';
+const SKIP_NATIVE_MESSAGING = process.argv.includes('--skip-native-messaging');
+// Internal-only flag relaunchElevated() passes to itself: the original
+// (pre-JS-port) install-native-messaging-host.bat only ever re-elevated a
+// small, build-free registration step — building was a wholly separate
+// script. This setup.js's elevated relaunch re-runs the whole file, so
+// without this flag it would also redo npm run build + two cargo release
+// builds a second time for nothing, since the non-elevated parent process
+// already just did them seconds earlier.
+const REGISTER_ONLY = process.argv.includes('--register-only');
 
 const HOSTS = [
   {
@@ -133,15 +153,15 @@ function relaunchElevated() {
   // module", relaunchElevated() still called process.exit() with that
   // failure's code, and nothing in setup.js's own flow surfaced it as an
   // error, so registration just silently never happened whenever HKLM/
-  // elevation was required). Re-running the whole script means
-  // buildExtension()/buildRustHost() redo their work under the elevated
-  // process too, but that's harmless — just some redundant build time.
+  // elevation was required). --register-only skips the redundant rebuild
+  // (see REGISTER_ONLY above) — the pre-JS-port .bat only ever re-elevated
+  // the lightweight registration step, never a full rebuild.
   const scriptPath = __filename;
   const result = spawnSync(
     'powershell.exe',
     [
       '-NoLogo', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command',
-      `$p = Start-Process -FilePath 'node' -ArgumentList '"${scriptPath}"' -Verb RunAs -Wait -PassThru; exit $p.ExitCode`,
+      `$p = Start-Process -FilePath 'node' -ArgumentList '"${scriptPath}" --register-only' -Verb RunAs -Wait -PassThru; exit $p.ExitCode`,
     ],
     { stdio: 'inherit' },
   );
@@ -167,6 +187,17 @@ function registerNativeMessagingHostWindows(host, exePath, regRoot) {
 }
 
 function installWindows() {
+  if (!REGISTER_ONLY) {
+    for (const host of HOSTS) {
+      buildRustHost(host.dir);
+    }
+  }
+
+  if (SKIP_NATIVE_MESSAGING) {
+    log('--skip-native-messaging: leaving Native Messaging host registration untouched.');
+    return;
+  }
+
   const regRoot = isUserLevelDisabledOnWindows() ? 'HKLM' : 'HKCU';
   if (regRoot === 'HKLM' && !isElevated()) {
     relaunchElevated();
@@ -174,7 +205,6 @@ function installWindows() {
   }
 
   for (const host of HOSTS) {
-    buildRustHost(host.dir);
     const exePath = findExe(host.dir, host.exeName);
     registerNativeMessagingHostWindows(host, exePath, regRoot);
   }
@@ -202,7 +232,7 @@ function installLinux() {
 }
 
 function main() {
-  buildExtension();
+  if (!REGISTER_ONLY) buildExtension();
 
   if (process.platform === 'win32') {
     installWindows();
@@ -214,6 +244,24 @@ function main() {
   }
 
   log('Done. Load extension/dist as an unpacked extension in edge://extensions (or reload it if already loaded).');
+
+  if (SKIP_NATIVE_MESSAGING) {
+    log('');
+    log('Native Messaging registration was skipped, so the extension cannot auto-launch');
+    log('the companion processes.');
+    log('');
+    log(`terminal-host has a manual fallback: run ${findExe('terminal-host', 'terminal-host.exe')}`);
+    log('directly (e.g. double-click it), then paste the port/token it prints into the');
+    log('extension once. Both are saved to disk and reused on every restart (see');
+    log('terminal-host/src/config.rs\'s load_or_create), so this is a one-time step —');
+    log('just make sure the .exe is already running (a shortcut in your Windows Startup');
+    log('folder works well) before opening the extension, and it reconnects on its own.');
+    log('');
+    log('lsp-host has NO such fallback yet — it only ever connects via Native Messaging,');
+    log('so language server features (autocomplete, diagnostics, ...) will not work at');
+    log('all under --skip-native-messaging. The editor and terminal are otherwise fully');
+    log('usable without it.');
+  }
 }
 
 main();
